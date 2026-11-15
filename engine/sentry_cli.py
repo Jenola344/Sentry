@@ -17,7 +17,7 @@ import shutil
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 # Import modular rules
 from rules import (
@@ -25,6 +25,7 @@ from rules import (
     WHITELIST_LOCKFILES,
     MEDIA_EXTENSIONS,
     TEXT_EXTENSIONS,
+    ExposureResolver,
     mask_secret,
     compute_risk_score,
     luhn_checksum_valid,
@@ -232,7 +233,11 @@ def print_loaded_state(state_path: Path, state: Dict[str, Any]):
     print(f"    Audit time:    {state.get('generated_at', 'unknown')}")
     print(f"    Target root:   {state['target_root']}")
     print(f"    Files scanned: {state.get('total_evaluated', 0)}")
-    print(f"    Findings:      {len(state['findings'])}\n")
+    print(f"    Findings:      {len(state['findings'])}")
+    exposure = state.get("exposure") or {}
+    if exposure:
+        print(f"    Exposure:      {exposure.get('source', 'unknown')} — {exposure.get('root_evidence', 'n/a')}")
+    print()
 
 
 class SentryCLI:
@@ -241,16 +246,23 @@ class SentryCLI:
         target_path: Path,
         vault_path: Path,
         report_path: Optional[Path] = None,
-        is_shared: bool = True,
-        is_public: bool = True,
+        is_shared: Optional[bool] = None,
+        is_public: Optional[bool] = None,
         scan_depth: str = "deep"
     ):
         self.target_path = target_path.resolve()
         self.vault_path = vault_path.resolve()
         self.report_path = report_path or (self.vault_path / "Reports" / f"Risk_Heatmap_Report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.md")
-        self.is_shared = is_shared
-        self.is_public = is_public
         self.scan_depth = scan_depth
+
+        # Context multipliers come from measured POSIX reachability unless the
+        # operator pins them with --shared/--public. The audited root sets the
+        # headline values; each finding is scored against its own file.
+        self.exposure = ExposureResolver(self.target_path, is_shared, is_public)
+        root_exposure = self.exposure.for_root()
+        self.is_shared = root_exposure.shared
+        self.is_public = root_exposure.public
+        self.exposure_evidence = root_exposure.evidence
 
         self.state_path: Optional[Path] = None
         self.findings: List[Dict[str, Any]] = []
@@ -280,10 +292,12 @@ class SentryCLI:
     def run_audit(self):
         self.print_banner()
         print(f"[*] Target Directory:        {self.target_path}")
-        print(f"[*] Multi-User Shared Share: {self.is_shared} (Exposure Multiplier α = 0.50)")
-        print(f"[*] Public / Guest Enabled:  {self.is_public} (Exposure Multiplier β = 0.75)")
         print(f"[*] Scan Depth:              {self.scan_depth}")
-        print(f"[*] Quarantine Vault:        {self.vault_path}\n")
+        print(f"[*] Quarantine Vault:        {self.vault_path}")
+        print(f"[*] Context Multipliers:     α = {0.50 if self.is_shared else 0.00:.2f} (multi-user), "
+              f"β = {0.75 if self.is_public else 0.00:.2f} (public/guest)")
+        print(f"[*] Exposure Source:         {self.exposure.source} — {self.exposure_evidence}")
+        print(f"    Each finding is scored against its own file's reachability below the audited root.\n")
 
         finding_id_seq = 1
 
@@ -322,7 +336,7 @@ class SentryCLI:
                 if ext == ".zip":
                     if self._check_zip_encryption(filepath):
                         self.unscanned_encrypted += 1
-                        s, a, b, r = compute_risk_score("MEDIUM", self.is_shared, self.is_public)
+                        s, a, b, r = self._risk("MEDIUM", filepath)
                         self.findings.append({
                             "id": f"FIND-{finding_id_seq:03d}",
                             "severity": "MEDIUM",
@@ -384,7 +398,7 @@ class SentryCLI:
         # Credential and identifier patterns (shared with the image-text pass)
         for pattern_key, category, severity, mask_kind in TEXT_CREDENTIAL_RULES:
             for match in PATTERNS[pattern_key].findall(content):
-                s, a, b, r = compute_risk_score(severity, self.is_shared, self.is_public)
+                s, a, b, r = self._risk(severity, filepath)
                 self.findings.append({
                     "id": f"FIND-{start_idx + count:03d}",
                     "severity": severity,
@@ -398,7 +412,7 @@ class SentryCLI:
 
         # BIP-39 recovery phrases (12 or 24 consecutive dictionary words)
         for phrase in find_bip39_phrases(content):
-            s, a, b, r = compute_risk_score("CRITICAL", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("CRITICAL", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "CRITICAL",
@@ -422,7 +436,7 @@ class SentryCLI:
 
         # SSN
         for m in PATTERNS["us_ssn"].findall(content):
-            s, a, b, r = compute_risk_score("HIGH", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("HIGH", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "HIGH",
@@ -438,7 +452,7 @@ class SentryCLI:
         for m in PATTERNS["iban"].findall(content):
             if not iban_checksum_valid(m):
                 continue  # ISO 7064 Mod-97 rejects lookalikes
-            s, a, b, r = compute_risk_score("HIGH", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("HIGH", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "HIGH",
@@ -476,7 +490,7 @@ class SentryCLI:
         # Credential and identifier patterns inside the document text layer
         for pattern_key, category, severity, mask_kind in TEXT_CREDENTIAL_RULES:
             for match in PATTERNS[pattern_key].findall(text):
-                s, a, b, r = compute_risk_score(severity, self.is_shared, self.is_public)
+                s, a, b, r = self._risk(severity, filepath)
                 self.findings.append({
                     "id": f"FIND-{start_idx + count:03d}",
                     "severity": severity,
@@ -489,7 +503,7 @@ class SentryCLI:
                 count += 1
 
         if any(kw in text for kw in ["Account Balance", "Private Wealth", "Routing Number", "Wire Transfer"]):
-            s, a, b, r = compute_risk_score("MEDIUM", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("MEDIUM", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "MEDIUM",
@@ -516,7 +530,7 @@ class SentryCLI:
 
         # Exposure metadata: a shared photo of a document also leaks where it was taken.
         if info["gps"]:
-            s, a, b, r = compute_risk_score("MEDIUM", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("MEDIUM", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "MEDIUM",
@@ -535,7 +549,7 @@ class SentryCLI:
 
         for pattern_key, category, severity, mask_kind in TEXT_CREDENTIAL_RULES:
             for match in PATTERNS[pattern_key].findall(text):
-                s, a, b, r = compute_risk_score(severity, self.is_shared, self.is_public)
+                s, a, b, r = self._risk(severity, filepath)
                 self.findings.append({
                     "id": f"FIND-{start_idx + count:03d}",
                     "severity": severity,
@@ -548,7 +562,7 @@ class SentryCLI:
                 count += 1
 
         for match in PATTERNS["us_ssn"].findall(text):
-            s, a, b, r = compute_risk_score("HIGH", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("HIGH", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "HIGH",
@@ -564,7 +578,7 @@ class SentryCLI:
         for candidate in re.findall(r"\b(?:\d[ -]*?){13,19}\b", text):
             digits = re.sub(r"\D", "", candidate)
             if luhn_checksum_valid(digits):
-                s, a, b, r = compute_risk_score("HIGH", self.is_shared, self.is_public)
+                s, a, b, r = self._risk("HIGH", filepath)
                 self.findings.append({
                     "id": f"FIND-{start_idx + count:03d}",
                     "severity": "HIGH",
@@ -579,7 +593,7 @@ class SentryCLI:
 
         # BIP-39 recovery phrases pasted into a screenshot or text chunk
         for phrase in find_bip39_phrases(text):
-            s, a, b, r = compute_risk_score("CRITICAL", self.is_shared, self.is_public)
+            s, a, b, r = self._risk("CRITICAL", filepath)
             self.findings.append({
                 "id": f"FIND-{start_idx + count:03d}",
                 "severity": "CRITICAL",
@@ -661,6 +675,10 @@ class SentryCLI:
             "scan_depth": self.scan_depth,
             "is_shared": self.is_shared,
             "is_public": self.is_public,
+            "exposure": {
+                "source": self.exposure.source,
+                "root_evidence": self.exposure_evidence,
+            },
             "total_evaluated": self.total_evaluated,
             "skipped_oversized": self.skipped_oversized,
             "skipped_media": self.skipped_media,
@@ -688,6 +706,9 @@ class SentryCLI:
             "# 🛡️ Sentry Local Security Audit — Risk Heatmap Report",
             f"**Audit Date:** {today}  ",
             f"**Target Storage Root:** `{self.target_path}`  ",
+            f"**Exposure Model:** α = {0.50 if self.is_shared else 0.00:.2f} (multi-user), "
+            f"β = {0.75 if self.is_public else 0.00:.2f} (public/guest) — {self.exposure.source}  ",
+            f"**Exposure Evidence:** {self.exposure_evidence}  ",
             f"**Platform:** UGREEN AI NAS iDX6011 Pro (UGOS)  ",
             "**Egress Verification:** Verified 0 Bytes Transmitted (100% Local Execution)",
             "",
@@ -726,6 +747,11 @@ class SentryCLI:
         with open(self.report_path, "w", encoding="utf-8") as rf:
             rf.write("\n".join(lines))
         print(f"\n[+] Risk Heatmap Report saved to: {self.report_path}")
+
+    def _risk(self, severity: str, filepath: Path) -> Tuple[float, float, float, float]:
+        """Scores one finding against the reachability of the file that holds it."""
+        exposure = self.exposure.for_path(filepath)
+        return compute_risk_score(severity, exposure.shared, exposure.public)
 
     @staticmethod
     def _gate_menu() -> str:
@@ -982,6 +1008,22 @@ def main():
     parser.add_argument("--vault", type=str, default=None, help=f"Quarantine vault root (default: {DEFAULT_VAULT})")
     parser.add_argument("--depth", choices=["quick", "standard", "deep"], default="deep")
     parser.add_argument(
+        "--shared", dest="shared", action="store_true", default=None,
+        help="Force α_multi = 0.50 (default: derive multi-user access from POSIX permissions)"
+    )
+    parser.add_argument(
+        "--no-shared", dest="shared", action="store_false", default=None,
+        help="Force α_multi = 0.00 even when group access is possible"
+    )
+    parser.add_argument(
+        "--public", dest="public", action="store_true", default=None,
+        help="Force β_public = 0.75 (default: derive guest/public access from POSIX permissions)"
+    )
+    parser.add_argument(
+        "--no-public", dest="public", action="store_false", default=None,
+        help="Force β_public = 0.00 even when other users can read the file"
+    )
+    parser.add_argument(
         "--approve",
         type=str,
         default=None,
@@ -1058,7 +1100,9 @@ def main():
     cli = SentryCLI(
         target_path=Path(args.target or DEFAULT_TARGET),
         vault_path=Path(args.vault or DEFAULT_VAULT),
-        scan_depth=args.depth
+        scan_depth=args.depth,
+        is_shared=args.shared,
+        is_public=args.public
     )
     cli.run_audit()
     if cli.prompt_quarantine_gate(args.approve) is False:

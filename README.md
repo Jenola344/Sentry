@@ -73,9 +73,11 @@ Risk is a function of both payload severity and network visibility:
 $$R = S \times (1 + \alpha_{\text{multi}} + \beta_{\text{public}})$$
 
 - **Base Severity ($S$):** `CRITICAL = 5.0` (Active API keys, root credentials, seed phrases), `HIGH = 3.0` (PII, payment cards, SSNs, payroll), `MEDIUM = 1.0` (Bank statements, encrypted archives).
-- **Multi-User Multiplier ($\alpha_{\text{multi}}$):** $+0.50$ if located in a multi-user shared storage pool.
-- **Public / Guest Multiplier ($\beta_{\text{public}}$):** $+0.75$ if guest or passwordless network access is permitted.
+- **Multi-User Multiplier ($\alpha_{\text{multi}}$):** $+0.50$ only when the file and every directory between it and the audited root grant group access (`g+r` on the file, `g+x` on the path).
+- **Public / Guest Multiplier ($\beta_{\text{public}}$):** $+0.75$ only when the same chain grants other-user access (`o+r` / `o+x`) — i.e. the file is genuinely reachable by guests and unrelated accounts.
 - **Maximum Composite Score:** $5.0 \times (1 + 0.50 + 0.75) = 11.25$.
+
+Multipliers are **measured, not assumed**: the engine walks POSIX reachability per finding, so a `0644` file behind a `0700` directory scores $5.0$, not $11.25$, and a `0600` file inside a `0777` directory is still private. Unreadable metadata fails closed (treated as exposed) so an optimistic default can never under-report. Operators can pin the context explicitly with `--shared/--no-shared` and `--public/--no-public` when the NAS reports share state through SMB/NFS/guest settings rather than POSIX bits; the saved audit state records whether the values were derived, explicit, or mixed.
 
 ### 4. Strict Zero-Leak Evidence Masking Standard
 Sentry never prints full raw secrets to terminal logs or markdown reports:
@@ -145,8 +147,11 @@ cd sentry-ugreen-nas/engine
 # Install lightweight dependencies
 pip install -r requirements.txt
 
-# Run the 4-Pass Deep Audit
+# Run the 4-Pass Deep Audit (exposure is derived from POSIX reachability)
 python sentry_cli.py --target ./sample_nas/Shared --vault ./sample_nas/Private_Security_Vault --depth deep
+
+# Or pin the share posture explicitly when POSIX bits do not express it
+python sentry_cli.py --target ./sample_nas/Shared --vault ./sample_nas/Private_Security_Vault --public --no-shared
 
 # Execute Human-Confirmed Quarantine for Critical Findings
 # (confirms the saved audit state from the previous command — no rescan, so finding IDs cannot drift)

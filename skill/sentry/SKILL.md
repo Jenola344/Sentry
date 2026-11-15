@@ -99,7 +99,7 @@ Sentry parses the share context flags:
 - `guest_access_allowed`: `true` if public, anonymous, or passwordless access is permitted.
 - `permissions_mode`: POSIX bitmask (e.g., `0777`, `0755`, `0700`).
 
-These values dynamically populate the context multipliers ($\alpha_{\text{multi}}$ and $\beta_{\text{public}}$) defined in [Sector C](#4-sector-c-risk-scoring-formula--strict-secret-masking).
+These values populate the context multipliers ($\alpha_{\text{multi}}$ and $\beta_{\text{public}}$) defined in [Sector C](#4-sector-c-risk-scoring-formula--strict-secret-masking). No multiplier is ever assumed: a share is only scored as multi-user or public when the evidence says so. The reference engine derives both from POSIX reachability (file mode plus every directory up to the audited root, failing closed on unreadable metadata), and accepts `--shared`/`--no-shared` and `--public`/`--no-public` so the network share posture reported here can override the local bitmask. The saved audit state records which source was used.
 
 ---
 

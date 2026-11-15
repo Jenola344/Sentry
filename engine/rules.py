@@ -7,8 +7,9 @@ and zero-leak evidence masking for UGREEN AI NAS security auditing.
 
 import re
 import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # BIP-39 English mnemonic dictionary (2,048 words). Loaded from the canonical
 # wordlist shipped beside this module so detection never relies on a partial sample.
@@ -215,6 +216,106 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
         return "[BEGIN PRIVATE KEY: Cryptographic Body Redacted]"
         
     return "****REDACTED****"
+
+
+@dataclass(frozen=True)
+class Exposure:
+    """Who can actually reach one path, derived from POSIX bits and directory reachability."""
+
+    shared: bool
+    public: bool
+    evidence: str
+
+
+class ExposureResolver:
+    """Derives the context multipliers from real access, not from a hardcoded worst case.
+
+    A path counts as reachable only when the file *and* every directory between it
+    and the audited root grant the matching access bit: a readable file inside a
+    ``0700`` directory is still owner-only, and a ``0600`` file inside a ``0777``
+    directory is still private. Unreadable metadata fails closed (treated as
+    exposed) so an optimistic default can never under-report exposure.
+    """
+
+    def __init__(self, root: Path, shared: Optional[bool] = None, public: Optional[bool] = None):
+        self.root = Path(root).resolve()
+        self._override_shared = shared
+        self._override_public = public
+        self._dir_cache: Dict[Path, Tuple[bool, bool]] = {}
+
+    @property
+    def source(self) -> str:
+        """Whether the multipliers came from the filesystem, from flags, or both."""
+        overrides = (self._override_shared is not None, self._override_public is not None)
+        if all(overrides):
+            return "explicit"
+        if any(overrides):
+            return "mixed"
+        return "derived"
+
+    def _dir_reach(self, directory: Path) -> Tuple[bool, bool]:
+        """Returns (group-traversable, other-traversable) for a directory and its ancestors.
+
+        Traversal stops at the audited root: permissions above the share belong to
+        the volume mount, not to the share being audited.
+        """
+        directory = Path(directory).resolve()
+        cached = self._dir_cache.get(directory)
+        if cached is not None:
+            return cached
+
+        try:
+            mode = directory.stat().st_mode & 0o777
+        except OSError:
+            return (True, True)  # fail closed
+
+        group_ok = bool(mode & 0o010)
+        other_ok = bool(mode & 0o001)
+
+        at_base = directory == self.root or self.root not in directory.parents
+        if at_base:
+            result = (group_ok, other_ok)
+        else:
+            parent_group, parent_other = self._dir_reach(directory.parent)
+            result = (group_ok and parent_group, other_ok and parent_other)
+
+        self._dir_cache[directory] = result
+        return result
+
+    def for_path(self, path: Path) -> Exposure:
+        """Resolves the exposure of one file, honouring explicit operator overrides."""
+        path = Path(path)
+        try:
+            mode = path.stat().st_mode & 0o777
+        except OSError:
+            shared, public = True, True
+            evidence = "metadata unreadable — assuming exposed"
+        else:
+            group_traversable, other_traversable = self._dir_reach(path.parent)
+            shared = bool(group_traversable and mode & 0o040)
+            public = bool(other_traversable and mode & 0o004)
+            if public:
+                evidence = f"mode {mode:04o} readable by group and other users"
+            elif shared:
+                evidence = f"mode {mode:04o} readable by group users only"
+            else:
+                evidence = f"mode {mode:04o} owner-only (no group/other reachability)"
+
+        notes = []
+        if self._override_shared is not None:
+            shared = self._override_shared
+            notes.append(f"α forced by --{'shared' if shared else 'no-shared'}")
+        if self._override_public is not None:
+            public = self._override_public
+            notes.append(f"β forced by --{'public' if public else 'no-public'}")
+        if notes:
+            evidence = f"{evidence}; {'; '.join(notes)}"
+
+        return Exposure(shared=shared, public=public, evidence=evidence)
+
+    def for_root(self) -> Exposure:
+        """Exposure of the audited root itself, used for the audit header and saved state."""
+        return self.for_path(self.root)
 
 
 def compute_risk_score(base_severity: str, is_shared: bool, is_public: bool) -> Tuple[float, float, float, float]:

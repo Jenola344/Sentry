@@ -19,6 +19,15 @@ Where:
 - **$\alpha_{\text{multi}} \in \{0.00, 0.50\}$:** Multi-User Exposure Multiplier. Evaluates whether the storage pool is shared across multiple local user accounts or groups.
 - **$\beta_{\text{public}} \in \{0.00, 0.75\}$:** Public / Guest Exposure Multiplier. Evaluates whether anonymous or guest access (SMB Guest, unauthenticated WebDAV, public share link) is enabled on the directory.
 
+### How the Multipliers Are Established
+
+The multipliers describe reachability, so they are measured rather than assumed:
+
+1. **Evidence first.** For each finding, the engine evaluates the file's own mode together with every directory between it and the audited root. A multiplier applies only when the whole chain grants it — `0644` inside a `0700` directory is owner-only, and `0600` inside a `0777` directory is private. Permissions *above* the audited root are ignored: they belong to the volume mount, not to the share.
+2. **Explicit overrides.** On UGOS the share posture also comes from network sharing configuration, which POSIX bits cannot express. `--shared` / `--no-shared` and `--public` / `--no-public` pin $\alpha$ and $\beta$ when the SMB/NFS/WebDAV guest state is known, and they always win over detection.
+3. **Fail closed.** If a mode cannot be read, the path is treated as exposed (both multipliers applied) so a permissions error can never produce an optimistic score.
+4. **Auditable.** The audit header, the saved findings state (`exposure.source` = `derived`, `explicit` or `mixed`, plus the root evidence string) and the Markdown report all record how the multipliers were established, so a score can be defended later.
+
 ### Base Severity Categorization ($S$)
 
 | Base Severity | Numerical Value ($S$) | Category Definition | Concrete Asset Examples |
