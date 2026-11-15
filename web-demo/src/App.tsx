@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import { SAMPLE_NAS_FIXTURES, VirtualFile } from './engine/sampleFixtures';
 import { runClientScan, Finding, ScanStats, TelemetryLog } from './engine/scanner';
 import { HeaderHUD } from './components/HeaderHUD';
@@ -8,6 +9,8 @@ import { RiskHeatmapTable } from './components/RiskHeatmapTable';
 import { LiveExecutionFeed } from './components/LiveExecutionFeed';
 import { QuarantineVault } from './components/QuarantineVault';
 import { ArchitectureModal } from './components/ArchitectureModal';
+import { AmbientBackdrop } from './components/AmbientBackdrop';
+import { HeroBanner } from './components/HeroBanner';
 
 export default function App() {
   const [files, setFiles] = useState<VirtualFile[]>(SAMPLE_NAS_FIXTURES);
@@ -251,18 +254,9 @@ export default function App() {
   const maxScore = findings.length > 0 ? Math.max(...findings.map((f) => f.score_r)) : 0;
 
   return (
-    <div className="min-h-screen bg-[#05080F] text-slate-100 flex flex-col relative selection:bg-teal-500 selection:text-slate-950">
-      {/* Background Cyber Grid & Radar SVG Overlay */}
-      <div className="fixed inset-0 pointer-events-none z-0 opacity-[0.035]">
-        <svg className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <pattern id="cyber-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#14b8a6" strokeWidth="1" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#cyber-grid)" />
-        </svg>
-      </div>
+    <div className="relative flex min-h-screen flex-col bg-transparent text-slate-100 selection:bg-teal-500 selection:text-slate-950">
+      {/* Drifting aurora, blueprint grid, cursor spotlight and scanline */}
+      <AmbientBackdrop />
 
       {/* Top Cyber HUD Header */}
       <HeaderHUD
@@ -276,17 +270,42 @@ export default function App() {
       />
 
       {/* Main Single-Screen Command Console */}
-      <main className="max-w-[1600px] mx-auto w-full px-6 py-5 space-y-5 flex-1 relative z-10">
+      <main className="max-w-[1600px] mx-auto w-full px-4 py-5 sm:px-6 space-y-5 flex-1 relative z-10">
+        {/* Hero posture band */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <HeroBanner
+            fileCount={files.length}
+            criticalCount={stats.critical}
+            quarantinedCount={quarantinedFiles.length}
+            isScanning={stats.isScanning}
+          />
+        </motion.div>
+
         {/* Telemetry KPI Strip */}
-        <TelemetryStrip
-          stats={stats}
-          maxScore={maxScore}
-          quarantinedCount={quarantinedFiles.length}
-          isShared={isShared}
-          isPublic={isPublic}
-        />
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <TelemetryStrip
+            stats={stats}
+            maxScore={maxScore}
+            quarantinedCount={quarantinedFiles.length}
+            isShared={isShared}
+            isPublic={isPublic}
+          />
+        </motion.div>
 
         {/* 4-Pass Neural Pipeline Visualizer & Context Toggles */}
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.55, delay: 0.16, ease: [0.22, 1, 0.36, 1] }}
+        >
         <PipelineVisualizer
           stats={stats}
           isShared={isShared}
@@ -317,6 +336,7 @@ export default function App() {
           }}
           onChangeDepth={setScanDepth}
         />
+        </motion.div>
 
         {/* Main Split Command Console: Left 65% / Right 35% */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
@@ -347,7 +367,8 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950/90 py-3.5 px-6 text-center text-xs font-mono text-slate-500 relative z-10 flex flex-wrap items-center justify-between gap-4">
+      <footer className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-t border-slate-900 bg-slate-950/90 px-6 py-3.5 text-center font-mono text-xs text-slate-500">
+        <div className="absolute inset-x-0 top-0 h-px hairline opacity-60" />
         <div>
           <span>UGREEN AI NAS iDX6011 Pro</span>
           <span className="mx-2">•</span>

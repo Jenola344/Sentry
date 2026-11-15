@@ -31,8 +31,8 @@ description: Zero-egress, 100% local security auditor for UGREEN AI NAS (UGOS). 
   return (
     <div className="glass-panel rounded-2xl flex flex-col h-full border border-teal-500/20 shadow-2xl overflow-hidden font-mono">
       {/* Header Tabs */}
-      <div className="p-3 bg-slate-950/80 border-b border-slate-800/80 flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 bg-slate-950/80 p-3">
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <button
             onClick={() => setActiveTab('LOGS')}
             className={`px-3 py-1.5 rounded-lg transition text-[11px] font-bold tracking-wider uppercase flex items-center gap-1.5 ${
@@ -73,7 +73,7 @@ description: Zero-egress, 100% local security auditor for UGREEN AI NAS (UGOS). 
         {activeTab === 'LOGS' && logs.length > 0 && (
           <button
             onClick={onClearLogs}
-            className="text-[10px] text-slate-500 hover:text-slate-300 transition"
+            className="shrink-0 whitespace-nowrap text-[10px] text-slate-500 transition hover:text-slate-300"
           >
             Clear
           </button>
@@ -126,6 +126,12 @@ description: Zero-egress, 100% local security auditor for UGREEN AI NAS (UGOS). 
                   </div>
                 );
               })
+            )}
+            {isScanning && (
+              <div className="flex items-center gap-1.5 pt-1 text-[11px] text-teal-400/80">
+                <span className="text-slate-500">$</span>
+                <span className="inline-block h-3 w-1.5 bg-teal-400 caret" />
+              </div>
             )}
             <div ref={logEndRef} />
           </div>

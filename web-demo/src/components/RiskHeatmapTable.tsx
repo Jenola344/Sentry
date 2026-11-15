@@ -188,9 +188,13 @@ export const RiskHeatmapTable: React.FC<Props> = ({
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.95 }}
                         transition={{ duration: 0.25 }}
-                        className={`hover:bg-slate-900/60 transition cursor-pointer ${
-                          f.selected ? 'bg-teal-950/20' : ''
-                        }`}
+                        className={`cursor-pointer border-l-2 transition hover:bg-slate-900/70 ${
+                          isCrit
+                            ? 'border-l-rose-500/60'
+                            : isHigh
+                            ? 'border-l-amber-500/50'
+                            : 'border-l-transparent'
+                        } ${f.selected ? 'bg-teal-950/25' : ''}`}
                         onClick={() => onToggleSelect(f.id)}
                       >
                         <td className="py-2.5 px-3" onClick={(e) => e.stopPropagation()}>

@@ -174,14 +174,14 @@ export const PipelineVisualizer: React.FC<Props> = ({
             return (
               <div
                 key={n.id}
-                className={`p-3.5 rounded-xl border transition-all duration-300 font-mono ${
+                className={`sheen rounded-xl border p-3.5 font-mono transition-all duration-300 ${
                   isActive
-                    ? 'bg-slate-900/90 border-teal-400 shadow-lg shadow-teal-500/20 scale-[1.02]'
+                    ? 'bg-slate-900/95 border-teal-400 shadow-lg shadow-teal-500/20 scale-[1.02]'
                     : isDone
-                    ? 'bg-slate-950/80 border-teal-500/30'
+                    ? 'bg-slate-950/95 border-teal-500/30'
                     : isSkipped
-                    ? 'bg-slate-950/40 border-slate-900 opacity-40'
-                    : 'bg-slate-950/60 border-slate-800/80 opacity-70'
+                    ? 'bg-slate-950/80 border-slate-900 opacity-40'
+                    : 'bg-slate-950/90 border-slate-800/80 opacity-75'
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">

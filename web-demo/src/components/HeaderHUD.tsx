@@ -30,7 +30,9 @@ export const HeaderHUD: React.FC<Props> = ({
   fileCount
 }) => {
   return (
-    <header className="border-b border-teal-500/20 bg-slate-950/80 backdrop-blur-xl sticky top-0 z-40 px-6 py-3.5 shadow-2xl">
+    <header className="sticky top-0 z-40 border-b border-teal-500/20 bg-slate-950/80 px-6 py-3.5 shadow-2xl backdrop-blur-xl">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px hairline opacity-70" />
+      <div className="pointer-events-none absolute -top-24 left-1/4 h-40 w-1/2 rounded-full bg-teal-500/10 blur-3xl" />
       <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-4">
         {/* Left: Brand & Telemetry Badge */}
         <div className="flex items-center gap-4">
@@ -85,7 +87,7 @@ export const HeaderHUD: React.FC<Props> = ({
           <button
             onClick={onRunAutoDemo}
             disabled={isScanning}
-            className={`relative group px-4 py-2 rounded-xl text-xs font-mono font-bold tracking-wider uppercase transition overflow-hidden shadow-lg ${
+            className={`relative group sheen px-4 py-2 rounded-xl text-xs font-mono font-bold tracking-wider uppercase transition overflow-hidden shadow-lg ${
               isScanning
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 : 'bg-gradient-to-r from-teal-600 to-cyan-600 text-slate-950 hover:from-teal-500 hover:to-cyan-500 shadow-teal-500/25 border border-teal-300'
