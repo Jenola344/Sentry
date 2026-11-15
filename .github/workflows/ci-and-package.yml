@@ -1,0 +1,89 @@
+name: Sentry CI & Uliya Package Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test-engine:
+    name: Test Engine & 4-Pass Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r engine/requirements.txt
+
+      - name: Run Sentry CLI Audit on Sample NAS
+        run: |
+          python engine/sentry_cli.py \
+            --target engine/sample_nas/Shared \
+            --vault engine/sample_nas/Private_Security_Vault \
+            --depth deep \
+            --approve "ALL CRITICAL"
+
+      - name: Verify Quarantine and Rollback
+        run: |
+          python engine/sentry_cli.py \
+            --action rollback \
+            --manifest $(find engine/sample_nas/Private_Security_Vault -name "quarantine-manifest.md")
+
+  validate-uliya-skill:
+    name: Validate Uliya Skill Standard & Package ZIP
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Uliya Validator & Build ZIP
+        run: |
+          python scripts/package_skill.py
+
+      - name: Upload Sentry Skill ZIP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentry-final-round2
+          path: sentry-final-round2.zip
+
+  build-web-demo:
+    name: Build Live Web Demo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: web-demo/package.json
+
+      - name: Install Web Dependencies
+        working-directory: web-demo
+        run: npm ci
+
+      - name: Build Web Application
+        working-directory: web-demo
+        run: npm run build
+
+      - name: Upload Web Demo Dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-demo-dist
+          path: web-demo/dist
