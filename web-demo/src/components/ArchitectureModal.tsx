@@ -25,7 +25,7 @@ description: Zero-egress, 100% local security auditor for UGREEN AI NAS (UGOS). 
   const ugosCommands = [
     { cmd: 'ug-filesystem', domain: 'Storage Enumeration', desc: 'Queries mount points, POSIX bitmasks, and network sharing context (SMB/NFS/WebDAV).' },
     { cmd: 'ug-document', domain: 'Text & Doc Parsing', desc: 'Streams plain text from code, .env, PDFs, Word docs, and CSVs up to 50MB budget.' },
-    { cmd: 'ug-photo', domain: 'NPU-Accelerated OCR', desc: 'Dispatches image files to Intel AI Boost NPU for visual layout and card text detection.' },
+    { cmd: 'ug-photo', domain: 'Delegated OCR & Layout', desc: 'On-device OCR and layout analysis. The portable engine instead reads embedded image text and EXIF metadata.' },
     { cmd: 'ug-knowledge', domain: 'Local Report Indexing', desc: 'Persists Risk Heatmap Reports locally into semantic memory without cloud telemetry.' },
     { cmd: 'ug-filemgr', domain: 'Atomic Isolation & Rollback', desc: 'Executes directory-preserving non-destructive moves and 1-click restoration.' }
   ];

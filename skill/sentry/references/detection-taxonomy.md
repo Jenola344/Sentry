@@ -22,12 +22,12 @@ flowchart TD
     RouteType -- "Office / PDF / Sheet" --> P3["Pass 3: Structured Docs<br/>ug-document extract"]
     RouteType -- "Image / Screenshot" --> P4Cond{"scan_depth == deep?"}
     
-    P4Cond -- "Yes" --> P4["Pass 4: Vision & OCR<br/>ug-photo ocr"]
+    P4Cond -- "Yes" --> P4["Pass 4: Image Text & Metadata<br/>embedded text / EXIF"]
     P4Cond -- "No" --> EndPass["Skip: Scan Depth Standard"]
     
     P2 --> Entropy["Shannon Entropy & Proximity Filter"]
     P3 --> DocValidate["Format & Luhn / MRZ Validators"]
-    P4 --> ImgValidate["Visual OCR & Layout Analysis"]
+    P4 --> ImgValidate["Embedded-text & Metadata Validation"]
     
     Entropy --> Match{"Pattern Match?"}
     DocValidate --> Match
@@ -47,7 +47,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | **Configuration & Code** | `.env*`, `.pem`, `.key`, `.p12`, `.json`, `.yaml`, `.yml`, `.txt`, `.md`, `.csv`, `.log`, `.sql`, `.xml`, `.conf`, `.ini` | **Inspect in Pass 2** | Primary source of developer credentials, API tokens, and connection strings. |
 | **Structured Documents** | `.pdf`, `.docx`, `.xlsx`, `.csv`, `.odt`, `.ods`, `.rtf` | **Inspect in Pass 3** | Common carrier of tax forms, bank statements, identity cards, and payroll exports. |
-| **Visual Media** | `.png`, `.jpg`, `.jpeg`, `.webp`, `.heic`, `.tiff`, `.bmp` | **Inspect in Pass 4 (Deep)** | Common destination for camera uploads, scanned identity documents, payment card photos, and crypto seed screenshots. |
+| **Visual Media** | `.png`, `.jpg`, `.jpeg`, `.webp` | **Inspect in Pass 4 (Deep)** | Embedded text layers, annotations and EXIF GPS ride along with camera uploads, screenshots and scanned documents. Pixel OCR is delegated to `ug-photo` on UGOS and is not performed by the portable engine. |
 | **Binary Executables** | `.exe`, `.dll`, `.so`, `.bin`, `.app`, `.dmg`, `.deb`, `.rpm` | **Skip** | Executable binaries lack structured secret context and risk triggering high false positives. |
 | **Media Streams** | `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`, `.webm`, `.mp3`, `.wav`, `.flac`, `.aac`, `.ogg`, `.m4a` | **Skip** | High volume, low probability of extractable text secrets; protects NAS disk pool I/O. |
 | **Disk Images** | `.iso`, `.img`, `.vmdk`, `.qcow2`, `.vdi` | **Skip** | Monolithic container images exceed single-file processing budgets. |
@@ -75,10 +75,9 @@ flowchart TD
  │ AWS Secret Access Key  │ (?i)aws_secret_access_key\s*=\s*[a-zA-Z0-9/+= │
  │                        │ ]{40}                                         │
  │ GitHub Token (Classic) │ ghp_[a-zA-Z0-9]{36}                           │
- │ GitHub Fine-Grained    │ github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}    │
- │ Slack Bot / User Token │ xox[baprs]-[0-9]{10,13}-[a-zA-Z0-9]{24,32}   │
+ │ Slack Bot / User Token │ xox[baprs]-[0-9]{10,13}(?:-[0-9]{10,13})?-[a- │
+ │                        │ zA-Z0-9]{24,32}                               │
  │ Google Cloud API Key   │ AIza[0-9A-Za-z\-_]{35}                        │
- │ Square Access Token    │ sq0csp-[0-9A-Za-z\-_]{43}                     │
  │ Stripe Secret Key      │ (?:sk|rk)_(?:live|test)_[a-zA-Z0-9]{24,99}    │
  │ Private Key Banners    │ -----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE │
  │                        │ KEY-----                                      │
@@ -92,16 +91,17 @@ flowchart TD
 BIP-39 mnemonic recovery phrases represent root access to cryptocurrency wallets. Sentry validates candidate word sequences against the official 2,048-word BIP-39 English dictionary:
 
 - **Detection Rule:**
-  - 12 or 24 consecutive lowercase words separated by single spaces or newlines.
-  - Every candidate word must belong to the BIP-39 dictionary (e.g., `abandon`, `ability`, `able`, `about`, `above`, `absent`, `absorb`, `abstract`, `absurd`, `abuse`, `access`, `accident`...).
-  - Proximity check: Look for adjacent keywords such as `seed`, `mnemonic`, `recovery`, `bip39`, `ledger`, `trezor`, `metamask`, `wallet`.
+  - 12 or 24 consecutive dictionary words separated by whitespace.
+  - Every candidate word is matched against the full **2,048-word English BIP-39 list**, shipped as `engine/bip39_english.txt` and loaded by `rules.py` (a short or missing list raises at import rather than silently degrading detection).
+  - Runs are scanned to their end before a finding is emitted, so a 24-word mnemonic is reported once as a 24-word phrase instead of two overlapping 12-word matches.
+  - Any non-dictionary token breaks the run. No proximity keyword is required: a bare mnemonic is still a mnemonic.
 - **Severity Rating:** `CRITICAL` ($S = 5.0$).
 
 ---
 
 ## 4. Pass 3 — Structured Documents & Financial Records
 
-Pass 3 processes `.pdf`, `.docx`, `.xlsx`, and `.csv` files using `ug-document` to uncover personal identity and banking records.
+Pass 3 processes `.pdf` and `.csv` files to uncover personal identity and banking records. PDF text layers also run through the Pass 2 credential/identifier rules, so a passport MRZ or API key embedded in a document is caught here. On UGOS, `ug-document` supplies extracted text for `.docx` and `.xlsx` as well; the portable engine does not parse those Office containers.
 
 ### Banking & Financial Regex Rules
 
@@ -122,28 +122,39 @@ Pass 3 processes `.pdf`, `.docx`, `.xlsx`, and `.csv` files using `ug-document` 
 
 #### 1. United States Social Security Number (SSN)
 - **Regex:** `\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b`
-- **Exclusion Filters:** Suppresses advertising numbers, sequential digits (`123-45-6789`), and all zeroes.
+- **Exclusion Filters:** Applies the SSA structural rules in the regex itself (area `000`/`666`/`9xx`, group `00`, serial `0000`). Sequential placeholder values are not special-cased, so `123-45-6789` is still reported.
 - **Severity:** `HIGH` ($S = 3.0$).
 
 #### 2. Passport Machine Readable Zone (MRZ - ICAO Doc 9303)
-- **Type 3 (Passports, 2 lines of 44 characters):**
-  - Line 1: `P<[A-Z]{3}[A-Z0-9<]{39}`
-  - Line 2: `[A-Z0-9<]{9}[0-9]{1}[A-Z]{3}[0-9]{6}[0-9]{1}[MF<][0-9]{6}[0-9]{1}[A-Z0-9<]{14}[0-9]{1}[0-9]{1}`
+- **Type 3 (Passports) line 1:** `P<[A-Z]{3}[A-Z0-9<]{39}`
+- **Masking:** the line is never reproduced; evidence shows `[PASSPORT MRZ: <n> characters redacted]`.
 - **Severity:** `HIGH` ($S = 3.0$).
 
-#### 3. UK National Insurance Number (NINO)
-- **Regex:** `\b[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}[0-9]{6}[A-DFM]{0,1}\b`
-- **Severity:** `HIGH` ($S = 3.0$).
 
 ---
 
-## 5. Pass 4 — Visual OCR & Screenshot Audit (`ug-photo`)
+## 5. Pass 4 — Image Text & Metadata Audit (`ug-photo`)
 
-When `scan_depth=deep`, Sentry engages the UGREEN AI NAS NPU via `ug-photo` to inspect image files.
+When `scan_depth=deep`, image files are inspected in two layers.
+
+### Layer 1 — Embedded text (portable engine, `engine/image_text.py`, no OCR)
+
+Text already stored inside the file is extracted without any optical recognition:
+
+| Container | Carriers |
+| :--- | :--- |
+| **PNG** | `tEXt`, `zTXt`, `iTXt` chunks |
+| **JPEG** | `COM` comments, EXIF `ImageDescription` / `Software` / `Artist` / `UserComment` |
+
+The extracted text is then run through the Pass 2 detectors (cloud keys, private-key banners, seed phrases) and the validators below. Findings are labelled `(<category>) (image text)` so they are distinguishable from text-file hits.
+
+### Layer 2 — Exposure metadata
+
+An EXIF GPS IFD pointer is reported as `MEDIUM` ($S = 1.0$) with the coordinates withheld: a photographed document on shared storage also reveals where it was taken. The engine never returns coordinate values, only their presence.
 
 ### Payment Card Verification (Luhn Algorithm)
 
-Sentry parses text strings extracted from card photos:
+Sentry validates 13–19 digit sequences found in embedded image text:
 
 ```python
 def luhn_checksum_valid(number_str: str) -> bool:
@@ -167,16 +178,16 @@ def luhn_checksum_valid(number_str: str) -> bool:
   - Mastercard: `^(?:5[1-5][0-9]{2}|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720)[0-9]{12}$`
   - American Express: `^3[47][0-9]{13}$`
   - Discover: `^6(?:011|5[0-9]{2})[0-9]{12}$`
-- **Expiration Date Correlation:** Matches `(?:0[1-9]|1[0-2])\/?([0-9]{2}|[0-9]{4})`.
-- **Severity:** If valid Luhn number + expiration date are found together, score as `HIGH` ($S = 3.0$). If CVV/CVC is also visible, upgrade to `CRITICAL` ($S = 5.0$).
+- **Expiration Date Correlation:** Not evaluated by the portable engine. Expiry or CVV context may be supplied by `ug-photo` OCR blocks on device, but its absence does not lower the severity of a Luhn-valid number.
+- **Severity:** A Luhn-valid 13–19 digit number found in shared storage scores `HIGH` ($S = 3.0$).
 
-### Visual Identity Document Recognition
-`ug-photo analyze --type id_card,document` checks visual aspect ratios and returns layout tags:
+### Delegated Visual Classification (`ug-photo`, device only)
+On UGOS, `ug-photo analyze --type id_card,document` checks visual aspect ratios and returns layout tags. The portable engine does not perform this step, because it requires the device NPU vision models:
 - `layout: passport_spread`
 - `layout: drivers_license_front`
 - `layout: credit_card_front`
 
-If visual layout detection matches with confidence $\ge 0.75$, findings are classified as `HIGH` ($S = 3.0$).
+On the device, a layout match with confidence $\ge 0.75$ is classified as `HIGH` ($S = 3.0$).
 
 ---
 

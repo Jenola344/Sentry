@@ -109,7 +109,7 @@ Wire Transfer ID: UGR-88921-NYC`
     name: 'payment_card_scan.png',
     size: 89420,
     type: 'image',
-    content: `OCR Extracted Text:
+    content: `Embedded text layer (PNG tEXt):
 VISA CORPORATE
 4111 2222 3333 4444
 VALID THRU: 11/28

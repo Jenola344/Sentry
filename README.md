@@ -43,7 +43,7 @@ flowchart TD
         A["Input Validation & Scope Governance"] --> B["Pass 1: Inventory & Resource Guard<br/>(ug-filesystem)"]
         B --> C["Pass 2: Text, Code & Config Secrets<br/>(ug-document)"]
         C --> D["Pass 3: Structured Docs & Financial Records<br/>(ug-document)"]
-        D --> E["Pass 4: Visual OCR & Screenshot Audit<br/>(ug-photo)"]
+        D --> E["Pass 4: Image Text & Metadata Audit<br/>(embedded text / EXIF)"]
         E --> F["Context-Aware Risk Scoring<br/>R = S × (1 + α + β)"]
         F --> G["Zero-Leak Evidence Redactor"]
         G --> H["Risk Heatmap Report Generation<br/>(ug-knowledge)"]
@@ -59,13 +59,13 @@ flowchart TD
 ## 🛡️ Key Pillars & Hackathon Innovations
 
 ### 1. 100% Zero-Egress Local Processing
-Sentry never opens external network sockets, sends telemetry, or calls remote cloud APIs. All file parsing, regular expression evaluation, and optical character recognition execute locally on the NAS CPU and Intel AI Boost NPU.
+Sentry never opens external network sockets, sends telemetry, or calls remote cloud APIs. All file parsing, regular-expression evaluation and metadata inspection execute locally on the NAS CPU; where the native `ug-photo` binary is present, pixel OCR runs on the on-device Intel AI Boost NPU.
 
 ### 2. Four-Pass Deterministic Pipeline
 - **Pass 1 — Inventory & Resource Guard (`ug-filesystem`):** Maps directory trees while enforcing a strict 50 MB file size ceiling, bypassing streaming media containers (`.mp4`, `.mkv`), and whitelisting dependency lockfiles (`package-lock.json`, `Cargo.lock`) to suppress false positives on cryptographic hashes.
-- **Pass 2 — Text, Code & Secrets (`ug-document`):** Scans `.env*`, `.pem`, `.json`, `.yaml`, and code files for cloud API keys (OpenAI, AWS, GCP, GitHub), private key headers, database connection URIs, and 12/24-word BIP-39 recovery phrases.
-- **Pass 3 — Structured Documents & Financials (`ug-document`):** Parses `.pdf`, `.docx`, `.xlsx`, and `.csv` files for corporate payroll records, US SSNs, IBAN/SWIFT banking numbers, and tax forms.
-- **Pass 4 — Visual OCR & Vision (`ug-photo`):** Active during deep scans. Audits scanned photos and screenshots for payment card numbers (validated via the ISO/IEC 7812 Luhn algorithm + expiry), government identity cards, and photographed seed words.
+- **Pass 2 — Text, Code & Secrets (`ug-document`):** Scans `.env*`, `.pem`, `.json`, `.yaml`, and code files for cloud credentials (OpenAI, AWS access and secret keys, GitHub, Slack, Google Cloud, Stripe), private key headers, database connection URIs, and 12/24-word BIP-39 recovery phrases matched against the full 2,048-word English dictionary.
+- **Pass 3 — Structured Documents & Financials (`ug-document`):** Parses `.pdf` and `.csv` files for corporate payroll records, US SSNs, IBAN/SWIFT banking numbers, passport MRZ lines, and tax forms.
+- **Pass 4 — Image Text & Metadata (deep scans):** Reads text that is already stored inside image files — PNG `tEXt`/`zTXt`/`iTXt` chunks and JPEG `COM`/EXIF text tags — plus exposure-relevant metadata such as EXIF GPS presence. That text is scanned for payment card numbers (validated with the ISO/IEC 7812 Luhn algorithm), cloud API keys, SSNs and BIP-39 seed phrases. The portable engine performs **no pixel OCR**: on UGOS, pixel OCR is delegated to the native `ug-photo ocr` binary declared in the Skill.
 
 ### 3. Context-Aware Risk Scoring Formula
 Risk is a function of both payload severity and network visibility:
@@ -110,8 +110,11 @@ sentry-ugreen-nas/
 ├── engine/                            # Standalone Local Python CLI Engine
 │   ├── sentry_cli.py                  # 4-pass scanner + interactive quarantine CLI
 │   ├── rules.py                       # Modular regex, entropy, and masking detectors
+│   ├── image_text.py                  # Embedded PNG/JPEG text + EXIF metadata extractor
+│   ├── tests/                         # Pytest suite (masking, scoring, quarantine, rollback)
 │   ├── requirements.txt               # Dependencies (rich, pypdf, pillow)
-│   └── sample_nas/                    # Safe synthetic NAS test dataset
+│   ├── sample_nas/                    # Safe synthetic NAS test dataset (4 passes)
+│   │   └── generate_fixtures.py       # Deterministic fixture builder
 ├── web-demo/                          # Interactive Web Simulator (React + Vite)
 │   ├── index.html
 │   ├── vite.config.ts
@@ -146,7 +149,9 @@ pip install -r requirements.txt
 python sentry_cli.py --target ./sample_nas/Shared --vault ./sample_nas/Private_Security_Vault --depth deep
 
 # Execute Human-Confirmed Quarantine for Critical Findings
+# (confirms the saved audit state from the previous command — no rescan, so finding IDs cannot drift)
 python sentry_cli.py --target ./sample_nas/Shared --vault ./sample_nas/Private_Security_Vault --approve "ALL CRITICAL"
+# Equivalent explicit grammar: --approve "APPROVE ALL CRITICAL" / "FIND-001, FIND-002" / "ALL"
 
 # Execute 1-Click Rollback via Manifest
 python sentry_cli.py --action rollback --manifest ./sample_nas/Private_Security_Vault/Quarantine_*/quarantine-manifest.md

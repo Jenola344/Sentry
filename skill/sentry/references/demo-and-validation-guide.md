@@ -67,39 +67,49 @@ Expected output:
 
 ### Step 2: Access the Synthetic Test Harness
 
-To test Sentry without exposing real production credentials, the repository includes a reproducible synthetic test dataset located at `engine/sample_nas/Shared`:
+To test Sentry without exposing real production credentials, the repository includes a reproducible synthetic test dataset located at `engine/sample_nas/Shared`. Every credential in it is a public placeholder, and the whole tree is regenerable byte-for-byte:
 
 ```bash
+# Regenerate the fixture set (deterministic; requires pillow from requirements.txt)
+python engine/sample_nas/generate_fixtures.py
+
 # Verify the sample NAS directory structure
 ls -la engine/sample_nas/Shared
 ```
 
-This creates the following realistic directory topology:
+This yields the following realistic directory topology:
 ```text
-/tmp/mock_ugreen_nas/
-├── Shared/
-│   ├── Projects/
-│   │   ├── app1/
-│   │   │   ├── .env               <-- Leak: sk-live-TESTING993848194810284729184810
-│   │   │   ├── package-lock.json  <-- Benign: SHA hashes (Suppressed by Lockfile Whitelist)
-│   │   │   └── index.js           <-- Benign code
-│   │   └── app2/
-│   │       └── .env               <-- Collision Test: Duplicate .env with AWS credentials
-│   ├── Backups/
-│   │   └── wallet_seed.txt        <-- Leak: 12-Word BIP-39 recovery mnemonic
-│   ├── Finance/
-│   │   └── payroll_2026.csv       <-- Leak: Corporate payroll with SSNs and IBANs
-│   ├── Documents/
-│   │   ├── Bank_Statement.pdf     <-- Leak: Account balance & routing numbers
-│   │   ├── corrupt_doc.pdf        <-- Edge Case: 0-byte corrupt file (SKIPPED_CORRUPT)
-│   │   └── meeting_notes.md       <-- Benign document
-│   ├── Archives/
-│   │   └── encrypted_keys.zip     <-- Edge Case: Password-protected ZIP (UNSCANNED_ENCRYPTED)
-│   └── Photos/
-│       ├── payment_card.png       <-- Leak: Image with Luhn-valid card & expiry (OCR)
-│       └── vacation.jpg           <-- Benign photo
-└── Private_Security_Vault/        <-- Target quarantine isolation destination
+engine/sample_nas/
+├── generate_fixtures.py           <-- Deterministic fixture builder
+└── Shared/
+    ├── Projects/
+    │   ├── app1/
+    │   │   ├── .env               <-- Leak: OpenAI key + PostgreSQL URI (two findings, one file)
+    │   │   ├── deploy-secrets.txt <-- Leak: GitHub, Slack, Google Cloud and Stripe tokens
+    │   │   ├── package-lock.json  <-- Benign: SHA hashes (Suppressed by Lockfile Whitelist)
+    │   │   └── index.js           <-- Benign code
+    │   └── app2/
+    │       └── .env               <-- Collision Test: duplicate .env with AWS credentials
+    ├── Backups/
+    │   └── wallet_seed.txt        <-- Leak: 12-word BIP-39 recovery mnemonic
+    ├── Finance/
+    │   └── payroll_2026.csv       <-- Leak: two SSNs and two IBANs
+    ├── Documents/
+    │   ├── Bank_Statement_Jan2026.pdf <-- Leak: account balance & routing numbers
+    │   ├── passport_mrz.txt       <-- Leak: passport Machine-Readable Zone line
+    │   ├── corrupt_doc.pdf        <-- Edge Case: 0-byte file (SKIPPED_CORRUPT)
+    │   └── meeting_notes.md       <-- Benign document
+    ├── Archives/
+    │   └── encrypted_keys.zip     <-- Edge Case: password-protected ZIP (UNSCANNED_ENCRYPTED)
+    ├── Photos/
+    │   ├── payment_card.png       <-- Leak: embedded PNG text with a Luhn-valid card number
+    │   ├── camera_upload.jpg      <-- Leak: EXIF GPS metadata, no embedded text
+    │   └── vacation.jpg           <-- Benign photo
+    └── Media/
+        └── product_demo.mp4       <-- Skip: streaming container (skipped_media)
 ```
+
+Expected result of `--depth deep` on this tree: **18 findings** spanning all four passes (9 CRITICAL, 6 HIGH, 3 MEDIUM), `1` skipped media stream, `1` skipped corrupt file, `1` unscanned encrypted archive, and `3` images inspected (2 without embedded text). The automated assertion lives in `engine/tests/test_sample_nas.py`.
 
 ---
 
@@ -117,7 +127,7 @@ Alternatively, inspect live listening sockets:
 ss -tunap | grep -E "ug-|sentry"
 ```
 
-**Result:** Zero outbound packets are emitted. All token detection, OCR parsing, and report writing execute strictly on local CPU/NPU buses and local Btrfs/EXT4 storage pools.
+**Result:** Zero outbound packets are emitted. All token detection, embedded-text extraction, delegated OCR (where `ug-photo` is present) and report writing execute strictly on local CPU/NPU buses and local Btrfs/EXT4 storage pools.
 
 ---
 
@@ -133,10 +143,10 @@ sentry audit \
 ```
 
 Sentry executes the 4-Pass detection engine:
-1. **Pass 1:** Discovers all files, detects `encrypted_keys.zip` as password-protected, flags `corrupt_doc.pdf` as 0-byte corrupt, and whitelists `package-lock.json`.
-2. **Pass 2:** Identifies OpenAI API key in `app1/.env`, AWS credentials in `app2/.env`, and the 12-word seed in `wallet_seed.txt`.
-3. **Pass 3:** Identifies employee SSNs and IBAN accounts in `payroll_2026.csv` and bank account data in `Bank_Statement.pdf`.
-4. **Pass 4:** Engages `ug-photo` NPU OCR on `payment_card.png`, validating the 16-digit card number with the Luhn algorithm and checking expiration dates.
+1. **Pass 1:** Discovers all 14 files, detects `encrypted_keys.zip` as password-protected, flags `corrupt_doc.pdf` as 0-byte corrupt, skips `product_demo.mp4`, and whitelists `package-lock.json`.
+2. **Pass 2:** Identifies the OpenAI key and PostgreSQL URI in `app1/.env`, the GitHub/Slack/GCP/Stripe tokens in `deploy-secrets.txt`, the AWS access and secret keys in `app2/.env`, and the 12-word seed in `wallet_seed.txt`.
+3. **Pass 3:** Identifies two employee SSNs and two IBAN accounts in `payroll_2026.csv`, the balance/routing record in `Bank_Statement_Jan2026.pdf`, and the passport MRZ in `passport_mrz.txt`.
+4. **Pass 4:** Reads the embedded PNG text of `payment_card.png` and Luhn-validates the 16-digit card number, and reports the EXIF GPS pointer in `camera_upload.jpg`. On the device, `ug-photo ocr` supplies additional text blocks first; the portable engine performs no pixel OCR.
 
 ---
 

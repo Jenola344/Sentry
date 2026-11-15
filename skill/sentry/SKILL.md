@@ -34,7 +34,7 @@ flowchart TD
         A["Input Validation & Scope Governance"] --> B["Pass 1: Inventory & Resource Guard<br/>(ug-filesystem)"]
         B --> C["Pass 2: Text, Code & Config Secrets<br/>(ug-document)"]
         C --> D["Pass 3: Structured Docs & Financial Records<br/>(ug-document)"]
-        D --> E["Pass 4: Visual OCR & Screenshot Audit<br/>(ug-photo)"]
+        D --> E["Pass 4: Image Text & Metadata Audit<br/>(ug-photo / embedded text)"]
         E --> F["Context-Aware Risk Scoring<br/>R = S * (1 + α + β)"]
         F --> G["Zero-Leak Evidence Redactor"]
         G --> H["Risk Heatmap Report Generation<br/>(ug-knowledge)"]
@@ -46,7 +46,7 @@ flowchart TD
 ```
 
 ### Key Technical Pillars
-1. **Zero-Egress Guarantee:** Sentry does not instantiate sockets, call cloud APIs, or emit outbound telemetry. All inspections occur through local UGOS system calls and NPU-accelerated models.
+1. **Zero-Egress Guarantee:** Sentry does not instantiate sockets, call cloud APIs, or emit outbound telemetry. All inspections occur through local UGOS system calls and, where available, on-device NPU models.
 2. **Four-Pass Deterministic Pipeline:** Files are routed based on MIME type, extension, and hardware cost, skipping massive binary blobs while thoroughly inspecting code, configurations, structured documents, and visual media.
 3. **Context-Aware Exposure Multipliers:** Risk is not assessed in a vacuum. A credential found in an unauthenticated guest-accessible folder is scored higher than one in an authenticated team folder, which in turn is scored higher than one in a private folder.
 4. **Strict Zero-Leak Evidence Masking:** Raw secrets are strictly redacted before output to reports, logs, or user interfaces.
@@ -65,7 +65,7 @@ Sentry accepts four structured configuration inputs:
 | :--- | :--- | :--- | :--- |
 | `target_paths` | `List[String]` | **Required** | One or more storage paths mounted under `/volume*` to be audited. |
 | `audit_scope` | `Enum` | `all` | Inspection categories: `credentials`, `identity_pii`, `financial`, or `all`. |
-| `scan_depth` | `Enum` | `standard` | `quick` (Passes 1-2), `standard` (Passes 1-3), `deep` (Passes 1-4 including vision OCR). |
+| `scan_depth` | `Enum` | `standard` | `quick` (Passes 1-2), `standard` (Passes 1-3), `deep` (Passes 1-4 including embedded image text and metadata). |
 | `quarantine_vault_path` | `String` | `/volume1/Private_Security_Vault/Quarantine_<YYYY-MM-DD>` | Target directory for isolated files. |
 
 ### System Path Blacklist & Boundary Enforcement
@@ -113,15 +113,15 @@ Sentry structures file inspection into four sequential, resource-governed passes
  │                      FOUR-PASS DETECTION PIPELINE                      │
  ├──────────────┬──────────────────┬─────────────────┬────────────────────┤
  │ Pass 1       │ Pass 2           │ Pass 3          │ Pass 4             │
- │ Inventory &  │ Text, Code &     │ Structured Docs │ Visual OCR &       │
- │ Resource     │ Config Secrets   │ & Financial     │ Screenshots        │
+ │ Inventory &  │ Text, Code &     │ Structured Docs │ Image Text &       │
+ │ Resource     │ Config Secrets   │ & Financial     │ Metadata           │
  │ Guard        │                  │ Records         │ (Deep Scan)        │
  ├──────────────┼──────────────────┼─────────────────┼────────────────────┤
  │ ug-filesystem│ ug-document      │ ug-document     │ ug-photo           │
  │ Size <= 50MB │ .env, .pem, .key │ .pdf, .docx,    │ .png, .jpg, .webp  │
- │ Skip media   │ .json, .yaml     │ .xlsx, .csv     │ Payment cards,     │
- │ Lockfile     │ API keys, DB     │ Tax, payroll,   │ Passports, photo   │
- │ whitelist    │ URLs, seed words │ SSN, IBAN, DL   │ seed phrases       │
+ │ Skip media   │ .json, .yaml     │ .xlsx, .csv     │ Embedded text,     │
+ │ Lockfile     │ API keys, DB     │ Tax, payroll,   │ EXIF GPS, cards    │
+ │ whitelist    │ URLs, seed words │ SSN, IBAN, DL   │ (no pixel OCR)     │
  └──────────────┴──────────────────┴─────────────────┴────────────────────┘
 ```
 
@@ -135,25 +135,24 @@ Sentry structures file inspection into four sequential, resource-governed passes
 - Targets developer and operational configurations: `.env*`, `.pem`, `.key`, `.p12`, `.json`, `.yaml`, `.yml`, `.txt`, `.md`, `.csv`, `.log`, `.sql`, `.xml`.
 - Extracts plain text via `ug-document extract --path <path> --format text/plain --max-bytes 52428800`.
 - Scans for:
-  - **Cloud & API Credentials:** OpenAI (`sk-live-`, `sk-proj-`), AWS (`AKIA...`), GitHub (`ghp_`, `gho_`), Slack (`xoxb-`), Google Cloud (`AIza...`), Square (`sq0csp-`), Bearer tokens.
+  - **Cloud & API Credentials:** OpenAI (`sk-live-`, `sk-proj-`), AWS access keys (`AKIA...`) and `aws_secret_access_key` values, GitHub (`ghp_`, `gho_`), Slack (`xoxb-` legacy and three-segment tokens), Google Cloud (`AIza...`), Stripe (`sk_live_`, `rk_live_`).
   - **Cryptographic Keys:** RSA/EC/OpenSSH private key banners (`-----BEGIN ... PRIVATE KEY-----`).
   - **Database Connection URIs:** PostgreSQL, MongoDB, MySQL URIs with plaintext credentials embedded (`postgres://user:pass@host:5432/db`).
-  - **BIP-39 Cryptocurrency Recovery Phrases:** 12 or 24-word sequences matching the BIP-39 standard wordlist.
+  - **BIP-39 Cryptocurrency Recovery Phrases:** 12 or 24-word sequences matched against the full 2,048-word English dictionary. A 24-word mnemonic is reported once as a 24-word phrase.
 
 ### Pass 3: Structured Documents & Financial Records (`ug-document`)
 - Inspects business documents: `.pdf`, `.docx`, `.xlsx`, `.csv`.
 - Dissects tabular and formatted text for high-risk identity and financial exposure:
   - **Banking Data:** International Bank Account Numbers (IBAN), SWIFT/BIC codes, account balances, routing numbers.
-  - **Government Identifiers:** US Social Security Numbers (SSN), Passport Machine-Readable Zone (MRZ) strings, UK National Insurance Numbers (NINO), Driver's License identifiers.
+  - **Government Identifiers:** US Social Security Numbers (SSN) and Passport Machine-Readable Zone (MRZ) line-1 strings.
   - **Financial Ledgers:** Corporate payroll sheets, tax filings (Forms 1040, W-2, 1099), earnings summaries.
 
-### Pass 4: Visual OCR & Screenshot Audit (`ug-photo`, active when `scan_depth=deep`)
-- Inspects image archives, camera backups, and desktop screenshot folders: `.png`, `.jpg`, `.jpeg`, `.webp`, `.heic`.
-- Dispatches images to local NPU-accelerated OCR via `ug-photo ocr --path <path> --lang eng,auto --format json`.
-- Analyzes layout and extracted text for:
-  - **Payment Cards:** 13–19 digit sequences validated with the Luhn algorithm plus card expiration dates.
-  - **Scanned Identity Credentials:** Physical passports, driver's licenses, and national ID cards.
-  - **Handwritten & Screenshotted Crypto Seed Words:** Visual backups of paper recovery sheets.
+### Pass 4: Image Text & Metadata Audit (`ug-photo`, active when `scan_depth=deep`)
+- Inspects image files that commonly carry embedded text or exposure metadata: `.png`, `.jpg`, `.jpeg`, `.webp`.
+- **Embedded text layer (no OCR):** reads text already stored in the file — PNG `tEXt`/`zTXt`/`iTXt` chunks, JPEG `COM` comments and EXIF text tags — and scans it with the Pass 2 detectors.
+- **Exposure metadata:** flags EXIF GPS presence as `MEDIUM`, because a photographed document in a shared folder also leaks where it was taken.
+- **Delegated OCR:** on UGOS the Skill dispatches pixel OCR to `ug-photo ocr --path <path> --lang eng,auto --format json` and consumes the returned text blocks. Sentry itself never performs pixel OCR, and the portable reference engine (`engine/`) implements only the embedded-text and metadata layer.
+- Findings from this pass are labelled as image-text findings so an operator can distinguish them from text-file hits.
 
 ---
 
@@ -169,7 +168,7 @@ Where:
 - **$S$ (Base Severity):** Intrinsic threat level of the exposed data asset:
   - `CRITICAL` ($S = 5.0$): Active cloud credentials, private keys, crypto seed phrases, unencrypted root database strings.
   - `HIGH` ($S = 3.0$): Government IDs, passports, SSNs, credit card numbers, payroll ledgers.
-  - `MEDIUM` ($S = 1.0$): Internal bank statements without credentials, masked documents, low-confidence OCR findings.
+  - `MEDIUM` ($S = 1.0$): Internal bank statements without credentials, masked documents, low-confidence OCR findings reported by `ug-photo`.
 - **$\alpha_{\text{multi}}$ (Multi-User Factor):**
   - $\alpha_{\text{multi}} = 0.50$ if the file resides in a multi-user shared folder.
   - $\alpha_{\text{multi}} = 0.00$ if the file resides in a strictly private user home directory.
@@ -319,7 +318,7 @@ Sentry is engineered to handle real-world NAS operational quirks gracefully. Com
 1. **Encrypted & Password-Protected Archives:** If an archive (`.zip`, `.7z`, `.rar`) or document (`.pdf`) is encrypted, Sentry marks it as `UNSCANNED_ENCRYPTED` with a `MEDIUM` severity reminder. Sentry **never** attempts brute-force decryption, preserving NAS CPU cycles.
 2. **Corrupted & Zero-Byte Files:** Recorded as `SKIPPED_CORRUPT` without halting the pipeline.
 3. **Permission-Denied Folders (`EACCES`):** Logged to the audit warnings section and skipped cleanly.
-4. **Low-Confidence OCR Results:** Image OCR findings with confidence scores below 0.70 are downgraded to `MEDIUM` and tagged `CONFIDENCE_UNCERTAIN` for human review.
+4. **Low-Confidence OCR Results:** Text returned by `ug-photo ocr` with confidence scores below 0.70 is downgraded to `MEDIUM` and tagged `CONFIDENCE_UNCERTAIN` for human review. The portable reference engine performs no OCR, so this tier applies only to the device path.
 5. **Symlinks & Circular Mounts:** Sentry tracks visited inodes (`st_ino`, `st_dev`) and caps traversal depth at 16 levels to prevent infinite recursion across NFS or loop mounts.
 
 ---
@@ -334,7 +333,7 @@ All interactions with storage, documents, images, and knowledge graphs route str
 ug-filesystem   # Storage enumeration, POSIX permission check, share metadata
 ug-filemgr      # Atomic file isolation, directory creation, rollback restore
 ug-document     # Text extraction, structured document decoding (.pdf, .docx, .xlsx)
-ug-photo        # NPU-accelerated OCR and visual layout document analysis
+ug-photo        # Delegated OCR and layout analysis (device-side; the engine does not OCR)
 ug-knowledge    # Local report indexing and persistent audit history queries
 ```
 

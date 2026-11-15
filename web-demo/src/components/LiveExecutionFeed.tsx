@@ -160,7 +160,7 @@ description: Zero-egress, 100% local security auditor for UGREEN AI NAS (UGOS). 
             <div className="p-2.5 rounded bg-slate-900/70 border border-slate-800">
               <div className="text-cyan-400 font-bold flex items-center gap-1.5">
                 <ChevronRight className="w-3.5 h-3.5" />
-                3. ug-photo (NPU Vision)
+                3. ug-photo (Delegated OCR / layout)
               </div>
               <code className="text-slate-300 text-[10px] block mt-1 break-all">
                 ug-photo ocr --path &quot;/volume1/Shared/Photos/card_scan.png&quot; --lang eng --format json

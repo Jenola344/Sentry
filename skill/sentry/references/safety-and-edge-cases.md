@@ -24,8 +24,8 @@ Where:
 | Base Severity | Numerical Value ($S$) | Category Definition | Concrete Asset Examples |
 | :--- | :--- | :--- | :--- |
 | **CRITICAL** | **5.0** | Immediate, active, and unauthenticated compromise vectors. | Cloud root credentials (AWS, GCP, Azure), OpenAI API keys, live SSH/RSA private keys, 12/24-word BIP-39 cryptocurrency seed phrases, unencrypted production database connection strings with passwords. |
-| **HIGH** | **3.0** | High-value identity, personal financial, or regulatory data assets. | Scanned passports, government ID numbers (US SSN, UK NINO), payment cards with valid Luhn checksums and expiry, corporate payroll ledgers, IRS tax returns (Forms 1040, W-2). |
-| **MEDIUM** | **1.0** | Confidential organizational records or degraded / partial secrets. | Bank statements without passwords, internal network architecture diagrams, expired certificates, low-confidence OCR matches ($< 0.70$), password-protected encrypted archives. |
+| **HIGH** | **3.0** | High-value identity, personal financial, or regulatory data assets. | Scanned passports, government ID numbers (US SSN, UK NINO), payment cards with valid Luhn checksums, corporate payroll ledgers, IRS tax returns (Forms 1040, W-2). |
+| **MEDIUM** | **1.0** | Confidential organizational records or degraded / partial secrets. | Bank statements without passwords, internal network architecture diagrams, expired certificates, low-confidence `ug-photo` OCR matches ($< 0.70$), password-protected encrypted archives. |
 
 ### Complete Composite Risk Matrix
 
@@ -71,7 +71,7 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
     """Deterministic zero-leak masking ensuring evidence verification without disclosure."""
     val = raw_val.strip()
     if secret_type == "api_key":
-        if len(val) <= 12:
+        if len(val) <= 10:
             return val[:2] + "****" + val[-2:]
         return val[:4] + "****" + val[-4:]
     
@@ -98,13 +98,27 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
         last4 = val[-4:]
         return f"{country}**-****-****-****-{last4}"
     
+    elif secret_type == "passport_mrz":
+        return f"[PASSPORT MRZ: {len(val)} characters redacted]"
+
     elif secret_type == "database_uri":
-        # Match protocol://user:password@host:port/database
-        import re
-        return re.sub(r":([^/@:\s]+)@", ":********@", val)
-    
+        # Split on the LAST '@' (the only legal credentials/host separator) so a
+        # raw '@', '/' or ':' inside the password cannot shift the split point
+        # and leave the tail of the secret in the evidence.
+        scheme, sep, rest = val.partition("://")
+        if not sep:
+            return "****REDACTED****"
+        credentials_end = rest.rfind("@")
+        if credentials_end == -1:
+            return "****REDACTED****"
+        userinfo = rest[:credentials_end]
+        host, slash, path = rest[credentials_end + 1:].partition("/")
+        user, colon, _password = userinfo.partition(":")
+        masked_userinfo = f"{user}:********" if colon else user
+        return f"{scheme}://{masked_userinfo}@{host}{slash}{path}"
+
     elif secret_type == "private_key":
-        return "[BEGIN PRIVATE KEY: Cryptographic Key Body Redacted]"
+        return "[BEGIN PRIVATE KEY: Cryptographic Body Redacted]"
     
     return "****REDACTED****"
 ```
@@ -120,6 +134,9 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
 | **US Social Security No.** | `123-45-6789` | `***-**-6789` |
 | **German IBAN** | `DE89370400440532013000` | `DE**-****-****-****-3000` |
 | **PostgreSQL Connection** | `postgres://dbadmin:SuperSecret2026!@10.0.0.5:5432/corp` | `postgres://dbadmin:********@10.0.0.5:5432/corp` |
+| **PostgreSQL (delimiter in password)** | `postgres://app:p@ssw0rd@db.internal:5432/prod` | `postgres://app:********@db.internal:5432/prod` |
+| **MongoDB (slash + at in password)** | `mongodb+srv://svc:pa/ss@word@cluster0.example.net/app` | `mongodb+srv://svc:********@cluster0.example.net/app` |
+| **Passport MRZ** | `P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<` | `[PASSPORT MRZ: 44 characters redacted]` |
 
 ---
 
@@ -148,7 +165,8 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
   - Scan continues seamlessly across remaining directories.
 
 ### 4. Low-Confidence Optical Character Recognition (OCR)
-- **Symptom:** In Pass 4 (`ug-photo`), degraded camera uploads or blurry screenshots produce OCR confidence metrics $< 0.70$.
+- **Scope:** Device-side only. The portable engine performs no pixel OCR — it reads embedded PNG/JPEG text and EXIF metadata, where text is exact and no confidence score exists.
+- **Symptom:** In Pass 4, degraded camera uploads or blurry screenshots produce `ug-photo` OCR confidence metrics $< 0.70$.
 - **Handling Protocol:**
   - Rather than discarding the finding or generating a false critical alert, Sentry automatically downgrades severity from `HIGH` to `MEDIUM`.
   - The finding is flagged with `CONFIDENCE_UNCERTAIN` and highlighted for manual visual review by the user.

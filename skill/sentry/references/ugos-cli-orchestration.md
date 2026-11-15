@@ -128,6 +128,8 @@ ug-document inspect-metadata \
 
 ### 2.3. `ug-photo`
 
+> Device-side OCR and layout analysis. The portable reference engine performs **no** pixel OCR; it reads embedded PNG/JPEG text and EXIF metadata only (see `Pass 4` in [detection-taxonomy.md](detection-taxonomy.md)).
+
 #### Command: NPU-Accelerated Optical Character Recognition
 ```bash
 ug-photo ocr \

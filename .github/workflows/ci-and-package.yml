@@ -24,12 +24,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r engine/requirements.txt
 
+      - name: Install Test Dependencies
+        run: pip install -r engine/requirements-dev.txt
+
+      - name: Run Engine Test Suite
+        run: python -m pytest engine/tests -q
+
       - name: Run Sentry CLI Audit on Sample NAS
         run: |
           python engine/sentry_cli.py \
             --target engine/sample_nas/Shared \
             --vault engine/sample_nas/Private_Security_Vault \
-            --depth deep \
+            --depth deep
+
+      - name: Approve Critical Findings via Confirmation Gate
+        run: |
+          python engine/sentry_cli.py \
+            --target engine/sample_nas/Shared \
+            --vault engine/sample_nas/Private_Security_Vault \
             --approve "ALL CRITICAL"
 
       - name: Verify Quarantine and Rollback

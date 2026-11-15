@@ -1,1 +1,2 @@
-console.log(" Server running on port 8080);
+const port = process.env.PORT || 8080;
+console.log(`Enterprise portal listening on ${port}`);

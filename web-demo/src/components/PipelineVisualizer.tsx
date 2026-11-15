@@ -59,10 +59,10 @@ export const PipelineVisualizer: React.FC<Props> = ({
     },
     {
       id: 4,
-      title: '04. NPU VISION & OCR',
+      title: '04. IMAGE TEXT & METADATA',
       binary: 'ug-photo',
       icon: ImageIcon,
-      summary: 'Payment Cards • Luhn • IDs',
+      summary: 'Embedded Text • EXIF • Luhn',
       status: scanDepth !== 'deep' ? 'skipped' : stats.currentPass === 4 && stats.isScanning ? 'active' : stats.isDone ? 'done' : 'idle'
     }
   ];
@@ -138,7 +138,7 @@ export const PipelineVisualizer: React.FC<Props> = ({
             >
               <option value="quick" className="bg-slate-900">Depth: Quick (Pass 1-2)</option>
               <option value="standard" className="bg-slate-900">Depth: Standard (Pass 1-3)</option>
-              <option value="deep" className="bg-slate-900">Depth: Deep (NPU OCR)</option>
+              <option value="deep" className="bg-slate-900">Depth: Deep (Image text)</option>
             </select>
           </div>
         </div>

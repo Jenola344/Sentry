@@ -7,39 +7,58 @@ and zero-leak evidence masking for UGREEN AI NAS security auditing.
 
 import re
 import math
+from pathlib import Path
 from typing import Tuple, List, Optional
 
-# Standard BIP-39 2048-word mnemonic dictionary excerpt (representative canonical sample)
-BIP39_WORDLIST = {
-    "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract",
-    "absurd", "abuse", "access", "accident", "account", "accuse", "achieve", "acid",
-    "acoustic", "acquire", "across", "act", "action", "actor", "actress", "actual",
-    "adapt", "add", "addict", "address", "adjust", "admit", "adult", "advance",
-    "advice", "aerobic", "affair", "afford", "afraid", "again", "age", "agent",
-    "agree", "ahead", "aim", "air", "airport", "aisle", "alarm", "album",
-    "alcohol", "alert", "alien", "all", "alley", "allow", "almost", "alone",
-    "alpha", "already", "also", "alter", "always", "amateur", "amazing", "among",
-    "amount", "amused", "analyst", "anchor", "ancient", "anger", "angle", "angry",
-    "animal", "ankle", "announce", "annual", "another", "answer", "antenna", "antique",
-    "anxiety", "any", "apart", "apology", "appear", "apple", "approve", "april",
-    "arch", "arctic", "area", "arena", "argue", "arm", "armed", "armor",
-    "army", "around", "arrange", "arrest", "arrive", "arrow", "art", "artefact",
-    "artist", "artwork", "ask", "aspect", "assault", "asset", "assist", "assume",
-    "asthma", "athlete", "atom", "attack", "attend", "attitude", "attract", "auction",
-    "audit", "august", "aunt", "author", "auto", "autumn", "average", "avocado",
-    "avoid", "awake", "aware", "away", "awesome", "awful", "awkward", "axis",
-    "baby", "bachelor", "bacon", "badge", "bag", "balance", "balcony", "ball",
-    "bamboo", "banana", "banner", "bar", "barely", "bargain", "barrel", "base",
-    "basic", "basket", "battle", "beach", "bean", "beauty", "because", "become",
-    "beef", "before", "begin", "behave", "behind", "believe", "below", "belt",
-    "bench", "benefit", "best", "betray", "better", "between", "beyond", "bicycle",
-    "bid", "bike", "bind", "biology", "bird", "birth", "bitter", "black",
-    "blade", "blame", "blanket", "blast", "bleak", "bless", "blind", "blood",
-    "blossom", "blouse", "blue", "blur", "blush", "board", "boat", "body",
-    "boil", "bomb", "bone", "bonus", "book", "boost", "border", "boring",
-    "borrow", "boss", "bottom", "bounce", "box", "boy", "bracket", "brain",
-    "brand", "brass", "brave", "bread", "breeze", "brick", "bridge", "brief"
-}
+# BIP-39 English mnemonic dictionary (2,048 words). Loaded from the canonical
+# wordlist shipped beside this module so detection never relies on a partial sample.
+BIP39_WORDLIST_PATH = Path(__file__).with_name("bip39_english.txt")
+
+
+def load_bip39_wordlist(path: Path = BIP39_WORDLIST_PATH) -> frozenset:
+    """Loads the BIP-39 English wordlist, failing loudly if it is missing or short."""
+    try:
+        raw_words = path.read_text(encoding="utf-8").split()
+    except OSError as exc:
+        raise RuntimeError(f"BIP-39 wordlist unavailable at {path}: {exc}") from exc
+
+    wordlist = frozenset(word.strip().lower() for word in raw_words if word.strip())
+    if len(wordlist) != 2048:
+        raise RuntimeError(
+            f"BIP-39 wordlist at {path} must hold 2,048 unique words, found {len(wordlist)}"
+        )
+    return wordlist
+
+
+BIP39_WORDLIST = load_bip39_wordlist()
+
+def find_bip39_phrases(text: str) -> List[str]:
+    """Returns BIP-39 candidate phrases, preferring 24-word runs.
+
+    Runs are flushed only when they end, so a 24-word mnemonic is reported once
+    as a 24-word phrase instead of being split into two 12-word matches.
+    """
+    phrases: List[str] = []
+    run: List[str] = []
+
+    def flush() -> None:
+        while len(run) >= 24:
+            phrases.append(" ".join(run[:24]))
+            del run[:24]
+        if len(run) >= 12:
+            phrases.append(" ".join(run[:12]))
+        # Always reset: a short fragment must not bridge the token that broke the run.
+        run.clear()
+
+    for raw_word in text.split():
+        word = raw_word.lower()
+        if word.isalpha() and word in BIP39_WORDLIST:
+            run.append(word)
+        else:
+            flush()
+
+    flush()
+    return phrases
 
 # Whitelist dependency lockfiles that contain legitimate hashes
 WHITELIST_LOCKFILES = {
@@ -67,7 +86,7 @@ PATTERNS = {
     "aws_access_key": re.compile(r"\b(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}\b"),
     "aws_secret_key": re.compile(r"(?i)aws_secret_access_key\s*=\s*['\"]?([a-zA-Z0-9/+=]{40})['\"]?"),
     "github_token": re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36}\b"),
-    "slack_token": re.compile(r"xox[baprs]-[0-9]{10,13}-[a-zA-Z0-9]{24,32}"),
+    "slack_token": re.compile(r"xox[baprs]-[0-9]{10,13}(?:-[0-9]{10,13})?-[a-zA-Z0-9]{24,32}"),
     "gcp_api_key": re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b"),
     "stripe_key": re.compile(r"\b(?:sk|rk)_(?:live|test)_[a-zA-Z0-9]{24,99}\b"),
     "database_uri": re.compile(r"(?:postgres|postgresql|mongodb\+srv|mongodb|mysql):\/\/[^:\s]+:[^@\s]+@[^\/\s]+(?:\/[^\s]*)?"),
@@ -127,6 +146,31 @@ def iban_checksum_valid(iban_str: str) -> bool:
         return False
 
 
+def mask_database_uri(uri: str) -> str:
+    """Redacts the whole userinfo password of a connection string.
+
+    The URI is split on the *last* ``@`` (the only legal credentials/host
+    separator) so a raw ``@``, ``/`` or ``:`` inside the password cannot shift
+    the split point and leak the tail of the secret.
+    """
+    scheme, sep, rest = uri.partition("://")
+    if not sep:
+        return "****REDACTED****"
+
+    # The authority must be split after the last '@' and before any later '/',
+    # otherwise a '/' inside the password is mistaken for the path separator.
+    credentials_end = rest.rfind("@")
+    if credentials_end == -1:
+        return "****REDACTED****"
+
+    userinfo = rest[:credentials_end]
+    host, slash, path = rest[credentials_end + 1:].partition("/")
+
+    user, colon, _password = userinfo.partition(":")
+    masked_userinfo = f"{user}:********" if colon else user
+    return f"{scheme}://{masked_userinfo}@{host}{slash}{path}"
+
+
 def mask_secret(secret_type: str, raw_val: str) -> str:
     """
     Deterministic zero-leak evidence masking standard.
@@ -161,8 +205,11 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
         last4 = val[-4:]
         return f"{country}**-****-****-****-{last4}"
     
+    elif secret_type == "passport_mrz":
+        return f"[PASSPORT MRZ: {len(val)} characters redacted]"
+
     elif secret_type == "database_uri":
-        return re.sub(r":([^/@:\s]+)@", ":********@", val)
+        return mask_database_uri(val)
     
     elif secret_type == "private_key":
         return "[BEGIN PRIVATE KEY: Cryptographic Body Redacted]"

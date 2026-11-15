@@ -377,14 +377,13 @@ export async function runClientScan(
   }
 
   // ---------------------------------------------------------------------------
-  // Pass 4: Visual OCR & NPU Vision (ug-photo)
+  // Pass 4: Image Text & Exposure Metadata (ug-photo)
   // ---------------------------------------------------------------------------
   if (scanDepth === 'deep') {
     stats.currentPass = 4;
     stats.cpuLoad = 40;
-    stats.npuLoad = 88; // NPU hardware boost active!
     onProgress?.(stats);
-    emitLog('INFO', 4, 'Pass 4 Active: Local NPU Vision & OCR Audit', 'Engaging Intel AI Boost NPU via ug-photo ocr');
+    emitLog('INFO', 4, 'Pass 4 Active: Image Text & Metadata Audit', 'Reading embedded text layers and EXIF metadata — no pixel OCR');
 
     for (const file of candidateFiles) {
       if (file.type === 'image') {
@@ -412,7 +411,7 @@ export async function runClientScan(
               pass: 4
             };
             findings.push(finding);
-            emitLog('CRIT', 4, `NPU OCR Vision: Visa card identified in ${file.name}`, `Luhn ISO/IEC 7812 valid + expiry verified -> ${masked}`);
+            emitLog('CRIT', 4, `Embedded image text: card number found in ${file.name}`, `Luhn ISO/IEC 7812 valid -> ${masked}`);
             onProgress?.(stats, undefined, finding);
             break;
           }
