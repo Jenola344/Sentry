@@ -45,8 +45,10 @@ flowchart TD
 
 | Category | File Extensions | Action | Justification |
 | :--- | :--- | :--- | :--- |
-| **Configuration & Code** | `.env*`, `.pem`, `.key`, `.p12`, `.json`, `.yaml`, `.yml`, `.txt`, `.md`, `.csv`, `.log`, `.sql`, `.xml`, `.conf`, `.ini` | **Inspect in Pass 2** | Primary source of developer credentials, API tokens, and connection strings. |
-| **Structured Documents** | `.pdf`, `.docx`, `.xlsx`, `.csv`, `.odt`, `.ods`, `.rtf` | **Inspect in Pass 3** | Common carrier of tax forms, bank statements, identity cards, and payroll exports. |
+| **Configuration & Code** | `.env*`, `.pem`, `.key`, `.json`, `.yaml`, `.yml`, `.txt`, `.md`, `.log`, `.sql`, `.xml`, `.conf`, `.ini`, `.toml`, `.cfg`, `.js`, `.ts`, `.py`, `.sh` | **Inspect in Pass 2** | Primary source of developer credentials, API tokens, and connection strings. `.pem`/`.key` are read as text so private-key banners are caught. |
+| **Binary Key Stores** | `.p12`, `.pfx`, `.jks` | **Not parsed** | Encrypted/PKCS#12 containers; a text scan finds nothing, so listing them as inspected would overstate coverage. |
+| **Structured Documents** | `.pdf`, `.csv`, `.tsv` | **Inspect in Pass 3** | Common carrier of bank statements, identity cards and payroll exports. |
+| **Office Containers** | `.docx`, `.xlsx`, `.odt`, `.ods`, `.rtf` | **Not parsed** | ZIP/XML containers the engine does not open; text inside them is invisible to an audit. Listing them as inspected would overstate coverage. |
 | **Visual Media** | `.png`, `.jpg`, `.jpeg`, `.webp` | **Inspect in Pass 4 (Deep)** | Embedded text layers, annotations and EXIF GPS ride along with camera uploads, screenshots and scanned documents. Pixel OCR is delegated to `ug-photo` on UGOS and is not performed by the portable engine. |
 | **Binary Executables** | `.exe`, `.dll`, `.so`, `.bin`, `.app`, `.dmg`, `.deb`, `.rpm` | **Skip** | Executable binaries lack structured secret context and risk triggering high false positives. |
 | **Media Streams** | `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`, `.webm`, `.mp3`, `.wav`, `.flac`, `.aac`, `.ogg`, `.m4a` | **Skip** | High volume, low probability of extractable text secrets; protects NAS disk pool I/O. |
@@ -101,7 +103,7 @@ BIP-39 mnemonic recovery phrases represent root access to cryptocurrency wallets
 
 ## 4. Pass 3 — Structured Documents & Financial Records
 
-Pass 3 processes `.pdf` and `.csv` files to uncover personal identity and banking records. PDF text layers also run through the Pass 2 credential/identifier rules, so a passport MRZ or API key embedded in a document is caught here. On UGOS, `ug-document` supplies extracted text for `.docx` and `.xlsx` as well; the portable engine does not parse those Office containers.
+Pass 3 processes `.pdf`, `.csv` and `.tsv` files to uncover personal identity and banking records. PDF text layers also run through the Pass 2 credential/identifier rules, so a passport MRZ or API key embedded in a document is caught here. Office containers (`.docx`, `.xlsx`, `.odt`, `.ods`, `.rtf`) are not parsed by this engine; treat their contents as uninspected.
 
 ### Banking & Financial Regex Rules
 
@@ -110,13 +112,16 @@ Pass 3 processes `.pdf` and `.csv` files to uncover personal identity and bankin
 - **Validation:** Modulo-97 check ($ISO\ 7064$). Convert letters to numbers ($A=10 \dots Z=35$), move the first 4 characters to the end, and verify that the integer modulo 97 equals 1.
 - **Severity:** `HIGH` ($S = 3.0$) if accompanied by account holder names or balances; otherwise `MEDIUM` ($S = 1.0$).
 
-#### 2. SWIFT / BIC Codes
-- **Regex:** `\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b`
-- **Context Guard:** Only triggers when within 10 lines of `SWIFT`, `BIC`, `Bank`, or `Wire Transfer`.
+#### 2. Bank Statement Markers
+- **Triggers:** extracted text containing `Account Balance`, `Private Wealth`, `Routing Number`, or `Wire Transfer`.
+- **Severity:** `MEDIUM` ($S = 1.0$) — a statement is sensitive, but carries no reusable credential.
+- **Masking:** evidence is a fixed label (`Account Balance & Routing Record Present`); no account digits are reproduced.
 
-#### 3. Payroll & Tax Ledgers
-- Detects recurring tables containing `Gross Pay`, `Net Pay`, `Withholding`, `Federal Tax`, `Medicare`, or `Social Security`.
-- **Severity:** `HIGH` ($S = 3.0$).
+#### 3. Not Detected (Deliberately)
+These appear in financial documents but have no rule in this engine, so an audit must not be read as covering them:
+- **SWIFT / BIC codes** — no regex, no context guard.
+- **Tax-form classification** (Forms 1040, W-2, 1099) — payroll and ledger exports are only flagged through the SSNs and IBANs they contain.
+- **National insurance / driver's licence numbers** — no format rule.
 
 ### Government Identification Patterns
 

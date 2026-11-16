@@ -64,7 +64,7 @@ Sentry never opens external network sockets, sends telemetry, or calls remote cl
 ### 2. Four-Pass Deterministic Pipeline
 - **Pass 1 — Inventory & Resource Guard (`ug-filesystem`):** Maps directory trees while enforcing a strict 50 MB file size ceiling, bypassing streaming media containers (`.mp4`, `.mkv`), and whitelisting dependency lockfiles (`package-lock.json`, `Cargo.lock`) to suppress false positives on cryptographic hashes.
 - **Pass 2 — Text, Code & Secrets (`ug-document`):** Scans `.env*`, `.pem`, `.json`, `.yaml`, and code files for cloud credentials (OpenAI, AWS access and secret keys, GitHub, Slack, Google Cloud, Stripe), private key headers, database connection URIs, and 12/24-word BIP-39 recovery phrases matched against the full 2,048-word English dictionary.
-- **Pass 3 — Structured Documents & Financials (`ug-document`):** Parses `.pdf` and `.csv` files for corporate payroll records, US SSNs, IBAN/SWIFT banking numbers, passport MRZ lines, and tax forms.
+- **Pass 3 — Structured Documents & Financials (`ug-document`):** Parses `.pdf`, `.csv` and `.tsv` files for US SSNs, IBAN account numbers, passport MRZ lines, and bank-statement markers (`Account Balance`, `Routing Number`, `Wire Transfer`). Office containers (`.docx`, `.xlsx`) are not parsed.
 - **Pass 4 — Image Text & Metadata (deep scans):** Reads text that is already stored inside image files — PNG `tEXt`/`zTXt`/`iTXt` chunks and JPEG `COM`/EXIF text tags — plus exposure-relevant metadata such as EXIF GPS presence. That text is scanned for payment card numbers (validated with the ISO/IEC 7812 Luhn algorithm), cloud API keys, SSNs and BIP-39 seed phrases. The portable engine performs **no pixel OCR**: on UGOS, pixel OCR is delegated to the native `ug-photo ocr` binary declared in the Skill.
 
 ### 3. Context-Aware Risk Scoring Formula
@@ -91,6 +91,9 @@ Sentry never prints full raw secrets to terminal logs or markdown reports:
 - **Zero Automated Deletions:** Sentry pauses immediately after presenting the Risk Heatmap.
 - **Explicit Confirmation Grammar:** Requires user command (`APPROVE ALL CRITICAL` or `APPROVE FIND-001, FIND-002`).
 - **Collision-Safe Vault:** Preserves full relative directory trees (`<Vault>/Shared/Projects/app1/.env` vs `<Vault>/Shared/Projects/app2/.env`), preventing file overwrites.
+- **Owner-Only Vault (`0700`):** The vault root, session directory and every parent inside it are created `0700`, so quarantined files stay unreadable to other NAS accounts even though each file keeps its original mode. An existing looser vault is tightened on the next run.
+- **Vault Outside the Share:** An audit refuses to start when `--vault` resolves inside `--target` — a vault below the share would keep the secrets in the exposed pool and be rescanned on the next pass.
+- **Verified Custody:** The manifest checksum is recomputed *after* the move. If the file changed in transit it is returned to its original path and reported, instead of being filed under a hash it no longer matches.
 - **1-Click Rollback:** Generates `quarantine-manifest.md` with SHA-256 hashes for instantaneous restoration.
 
 ---

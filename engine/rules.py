@@ -78,7 +78,10 @@ MEDIA_EXTENSIONS = {
 TEXT_EXTENSIONS = {
     ".env", ".txt", ".md", ".json", ".yaml", ".yml", ".sql",
     ".conf", ".ini", ".log", ".xml", ".js", ".ts", ".py",
-    ".sh", ".toml", ".cfg"
+    ".sh", ".toml", ".cfg",
+    # Key material is plain text for these formats; without them the private-key
+    # banner detector never runs on the files that matter most.
+    ".pem", ".key"
 }
 
 # Regular expressions for credentials and sensitive data

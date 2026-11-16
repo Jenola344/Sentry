@@ -51,7 +51,7 @@ flowchart TD
 3. **Context-Aware Exposure Multipliers:** Risk is not assessed in a vacuum. A credential found in an unauthenticated guest-accessible folder is scored higher than one in an authenticated team folder, which in turn is scored higher than one in a private folder.
 4. **Strict Zero-Leak Evidence Masking:** Raw secrets are strictly redacted before output to reports, logs, or user interfaces.
 5. **Two-Step Human-in-the-Loop Quarantine Gate:** Sentry operates under a strict principle of non-destruction. Automated scans **never** move, rename, or delete files without explicit user review and confirmation.
-6. **Reversible Hierarchy-Preserving Vault:** Quarantined files retain their full relative directory tree within a dedicated isolation vault, preventing file overwrite collisions and allowing one-command restoration.
+6. **Reversible Hierarchy-Preserving Vault:** Quarantined files retain their full relative directory tree within a dedicated isolation vault, preventing file overwrite collisions and allowing one-command restoration. The vault is created **owner-only (`0700`)** and must live outside the audited share: a vault inside the share is rejected, because it would leave the quarantined secrets in the exposed pool and be rescanned on the next pass. Each move is **checksum-verified after completion**, and a file that changes in transit is returned to its source instead of being recorded under a stale hash.
 
 ---
 
@@ -66,7 +66,7 @@ Sentry accepts four structured configuration inputs:
 | `target_paths` | `List[String]` | **Required** | One or more storage paths mounted under `/volume*` to be audited. |
 | `audit_scope` | `Enum` | `all` | Inspection categories: `credentials`, `identity_pii`, `financial`, or `all`. |
 | `scan_depth` | `Enum` | `standard` | `quick` (Passes 1-2), `standard` (Passes 1-3), `deep` (Passes 1-4 including embedded image text and metadata). |
-| `quarantine_vault_path` | `String` | `/volume1/Private_Security_Vault/Quarantine_<YYYY-MM-DD>` | Target directory for isolated files. |
+| `quarantine_vault_path` | `String` | `/volume1/Private_Security_Vault/Quarantine_<YYYY-MM-DD>` | Target directory for isolated files. Must resolve outside `target_paths`; created `0700`. |
 
 ### System Path Blacklist & Boundary Enforcement
 
@@ -118,10 +118,10 @@ Sentry structures file inspection into four sequential, resource-governed passes
  │ Guard        │                  │ Records         │ (Deep Scan)        │
  ├──────────────┼──────────────────┼─────────────────┼────────────────────┤
  │ ug-filesystem│ ug-document      │ ug-document     │ ug-photo           │
- │ Size <= 50MB │ .env, .pem, .key │ .pdf, .docx,    │ .png, .jpg, .webp  │
- │ Skip media   │ .json, .yaml     │ .xlsx, .csv     │ Embedded text,     │
- │ Lockfile     │ API keys, DB     │ Tax, payroll,   │ EXIF GPS, cards    │
- │ whitelist    │ URLs, seed words │ SSN, IBAN, DL   │ (no pixel OCR)     │
+ │ Size <= 50MB │ .env, .pem, .key │ .pdf, .csv,     │ .png, .jpg, .webp  │
+ │ Skip media   │ .json, .yaml     │ .tsv            │ Embedded text,     │
+ │ Lockfile     │ API keys, DB     │ SSN, IBAN,      │ EXIF GPS, cards    │
+ │ whitelist    │ URLs, seed words │ bank statements │ (no pixel OCR)     │
  └──────────────┴──────────────────┴─────────────────┴────────────────────┘
 ```
 
@@ -132,7 +132,7 @@ Sentry structures file inspection into four sequential, resource-governed passes
 - **Dependency Whitelist:** Suppresses false positives from package lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `poetry.lock`, `composer.lock`) which contain legitimate SHA hashes that mimic cryptographic tokens.
 
 ### Pass 2: Text, Code & Configuration Secrets (`ug-document`)
-- Targets developer and operational configurations: `.env*`, `.pem`, `.key`, `.p12`, `.json`, `.yaml`, `.yml`, `.txt`, `.md`, `.csv`, `.log`, `.sql`, `.xml`.
+- Targets developer and operational configurations: `.env*`, `.pem`, `.key`, `.json`, `.yaml`, `.yml`, `.txt`, `.md`, `.log`, `.sql`, `.xml`, `.conf`, `.ini`, `.toml`, `.cfg`, plus code files (`.js`, `.ts`, `.py`, `.sh`). Binary key stores (`.p12`) and `.csv`/`.tsv` are handled outside this pass — spreadsheets in Pass 3, binary containers not at all.
 - Extracts plain text via `ug-document extract --path <path> --format text/plain --max-bytes 52428800`.
 - Scans for:
   - **Cloud & API Credentials:** OpenAI (`sk-live-`, `sk-proj-`), AWS access keys (`AKIA...`) and `aws_secret_access_key` values, GitHub (`ghp_`, `gho_`), Slack (`xoxb-` legacy and three-segment tokens), Google Cloud (`AIza...`), Stripe (`sk_live_`, `rk_live_`).
@@ -141,11 +141,11 @@ Sentry structures file inspection into four sequential, resource-governed passes
   - **BIP-39 Cryptocurrency Recovery Phrases:** 12 or 24-word sequences matched against the full 2,048-word English dictionary. A 24-word mnemonic is reported once as a 24-word phrase.
 
 ### Pass 3: Structured Documents & Financial Records (`ug-document`)
-- Inspects business documents: `.pdf`, `.docx`, `.xlsx`, `.csv`.
-- Dissects tabular and formatted text for high-risk identity and financial exposure:
-  - **Banking Data:** International Bank Account Numbers (IBAN), SWIFT/BIC codes, account balances, routing numbers.
+- Inspects `.pdf`, `.csv` and `.tsv` files. Office containers (`.docx`, `.xlsx`, `.odt`, `.ods`, `.rtf`) are **not parsed** by this engine, so their contents are invisible to an audit.
+- Dissects extracted text for high-risk identity and financial exposure:
+  - **Banking Data:** International Bank Account Numbers (IBAN, Mod-97 validated) and bank-statement markers such as `Account Balance`, `Routing Number` and `Wire Transfer`.
   - **Government Identifiers:** US Social Security Numbers (SSN) and Passport Machine-Readable Zone (MRZ) line-1 strings.
-  - **Financial Ledgers:** Corporate payroll sheets, tax filings (Forms 1040, W-2, 1099), earnings summaries.
+  - **Financial Ledgers:** payroll and ledger exports surface through the identifiers they carry (SSNs, IBANs). Tax-form classification (Forms 1040, W-2, 1099) and SWIFT/BIC detection are not implemented.
 
 ### Pass 4: Image Text & Metadata Audit (`ug-photo`, active when `scan_depth=deep`)
 - Inspects image files that commonly carry embedded text or exposure metadata: `.png`, `.jpg`, `.jpeg`, `.webp`.
@@ -332,7 +332,7 @@ All interactions with storage, documents, images, and knowledge graphs route str
 # Core UGOS Command Suite Utilized by Sentry:
 ug-filesystem   # Storage enumeration, POSIX permission check, share metadata
 ug-filemgr      # Atomic file isolation, directory creation, rollback restore
-ug-document     # Text extraction, structured document decoding (.pdf, .docx, .xlsx)
+ug-document     # Text extraction for the formats the engine actually reads (.pdf, .csv, .tsv)
 ug-photo        # Delegated OCR and layout analysis (device-side; the engine does not OCR)
 ug-knowledge    # Local report indexing and persistent audit history queries
 ```

@@ -19,7 +19,8 @@ Sentry executes 100% locally on UGOS by orchestrating five native operating syst
  │ ug-filesystem  │ Storage enumeration, metadata, POSIX permissions,     │
  │                │ and network share (SMB/NFS/WebDAV) context auditing.  │
  │ ug-document    │ Native text extraction and metadata inspection for    │
- │                │ code, configuration, PDF, DOCX, XLSX, and CSV files.  │
+ │                │ code, configuration, PDF and CSV files. Office       │
+ │                │ containers (DOCX/XLSX) are outside this engine.      │
  │ ug-photo       │ On-device NPU-accelerated OCR and visual layout       │
  │                │ classification for image files (passports, cards).    │
  │ ug-knowledge   │ Local knowledge-base indexing and persistent storage  │
@@ -96,7 +97,7 @@ ug-document extract \
   --max-bytes 52428800
 ```
 **Behavior:**
-- Directly extracts decoded UTF-8 text from `.txt`, `.env`, `.json`, `.yaml`, `.csv`, `.pdf`, `.docx`, `.xlsx`.
+- Directly extracts decoded UTF-8 text from `.txt`, `.env`, `.json`, `.yaml`, `.csv`, `.tsv`, `.pdf`. Office containers (`.docx`, `.xlsx`) are not supported by this engine.
 - Enforces a hard stop if file content exceeds `--max-bytes` (50 MB).
 - Returns clean text output on `stdout` without invoking external Python or Node.js parsers.
 

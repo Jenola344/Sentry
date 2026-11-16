@@ -44,6 +44,25 @@ def test_token_is_detected_and_masked(make_cli, share, write_file, capsys, categ
     assert raw_token not in finding["masked_evidence"], "raw token leaked into evidence"
 
 
+@pytest.mark.parametrize("filename", ["server.pem", "server.key", "id_ed25519.key"])
+def test_key_files_are_read_as_text(make_cli, share, filename, capsys):
+    """A .pem/.key file is plain text; skipping the extension skips the banner detector."""
+    body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB"
+    (share / filename).write_text(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n" + body + "\n-----END OPENSSH PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+
+    cli = make_cli()
+    cli.run_audit()
+    capsys.readouterr()
+
+    keys = [f for f in cli.findings if f["category"] == "Private Key"]
+    assert len(keys) == 1, f"{filename} was not scanned"
+    assert keys[0]["severity"] == "CRITICAL"
+    assert body not in keys[0]["masked_evidence"], "key body leaked into evidence"
+
+
 def test_passport_mrz_masking_hides_every_character():
     masked = mask_secret("passport_mrz", MRZ)
     assert masked == f"[PASSPORT MRZ: {len(MRZ)} characters redacted]"

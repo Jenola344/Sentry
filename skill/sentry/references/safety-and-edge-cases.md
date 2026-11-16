@@ -33,7 +33,7 @@ The multipliers describe reachability, so they are measured rather than assumed:
 | Base Severity | Numerical Value ($S$) | Category Definition | Concrete Asset Examples |
 | :--- | :--- | :--- | :--- |
 | **CRITICAL** | **5.0** | Immediate, active, and unauthenticated compromise vectors. | Cloud root credentials (AWS, GCP, Azure), OpenAI API keys, live SSH/RSA private keys, 12/24-word BIP-39 cryptocurrency seed phrases, unencrypted production database connection strings with passwords. |
-| **HIGH** | **3.0** | High-value identity, personal financial, or regulatory data assets. | Scanned passports, government ID numbers (US SSN, UK NINO), payment cards with valid Luhn checksums, corporate payroll ledgers, IRS tax returns (Forms 1040, W-2). |
+| **HIGH** | **3.0** | High-value identity, personal financial, or regulatory data assets. | Scanned passports, US SSNs, payment cards with valid Luhn checksums, IBAN account numbers, and payroll exports that carry identity data. |
 | **MEDIUM** | **1.0** | Confidential organizational records or degraded / partial secrets. | Bank statements without passwords, internal network architecture diagrams, expired certificates, low-confidence `ug-photo` OCR matches ($< 0.70$), password-protected encrypted archives. |
 
 ### Complete Composite Risk Matrix
@@ -187,7 +187,17 @@ def mask_secret(secret_type: str, raw_val: str) -> str:
   - If an inode has already been visited in the current scan path, it is skipped immediately.
   - Maximum folder traversal depth is hard-capped at **16 directory levels**.
 
-### 6. NAS Resource Conservation & Memory Ceiling
+### 6. Vault Isolation, Permissions & Verified Custody
+
+- **Symptom:** Quarantining an exposed secret can create a second exposure if the destination is readable by other accounts — a `.env` moved from a `0755` share into a `0755` vault has not been protected, only relocated.
+- **Handling Protocol:**
+  - The vault root, the `Quarantine_<date>` session directory and every parent directory created inside it are set to `0700`. A pre-existing looser vault is tightened on the next run.
+  - Quarantined files keep their original modes; the owner-only directory chain is what makes them unreachable, so file modes never need to be rewritten (which would break byte-for-byte rollback).
+  - The vault must resolve **outside** the audited root. A vault path inside the share is rejected before any scan begins: it would be rescanned on the next pass and would leave the secrets inside the storage pool they were removed from.
+  - The SHA-256 recorded in the manifest is recomputed **after** the move. A mismatch means the file changed between hashing and moving; it is returned to its original path, reported as a failure, and left out of the manifest rather than filed under a hash it no longer matches.
+  - The vault stores quarantined bytes in plaintext by design — it is a custody area, not an encrypted archive. Protecting it is the job of the `0700` tree plus the host's disk encryption.
+
+### 7. NAS Resource Conservation & Memory Ceiling
 - **Symptom:** Multi-terabyte NAS volumes with hundreds of thousands of files risk consuming excessive RAM and causing disk contention.
 - **Handling Protocol:**
   - **Memory Ceiling:** The Sentry process memory footprint is governed to remain strictly under **256 MB RAM**.

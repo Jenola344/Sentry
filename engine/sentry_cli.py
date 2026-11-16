@@ -213,6 +213,47 @@ def try_sha256_file(path: Path) -> Optional[str]:
         return None
 
 
+def ensure_private_dir(path: Path) -> Path:
+    """Creates a directory owner-only (0700) and tightens one that already exists."""
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
+def restrict_tree_to_owner(path: Path, stop_at: Path) -> None:
+    """Applies 0700 to `path` and every parent up to and including `stop_at`.
+
+    Quarantined files keep their original modes, so the directories holding them
+    must be the thing that keeps other accounts out.
+    """
+    current = path.resolve()
+    boundary = stop_at.resolve()
+    while True:
+        try:
+            os.chmod(current, 0o700)
+        except OSError:
+            return
+        if current == boundary or boundary not in current.parents:
+            return
+        current = current.parent
+
+
+def validate_vault_location(target_path: Path, vault_path: Path) -> None:
+    """Rejects a vault inside the audited root.
+
+    A vault below the share would be rescanned on the next audit and would keep
+    the quarantined secrets inside the storage pool they were removed from.
+    """
+    target = Path(target_path).resolve()
+    vault = Path(vault_path).resolve()
+    if vault == target or vault.is_relative_to(target):
+        raise ValueError(
+            f"the quarantine vault ({vault}) must live outside the audited root ({target}); "
+            "a vault inside the share would be rescanned and the secrets moved into it "
+            "would stay inside the exposed storage pool"
+        )
+
+
 def _manifest_row(
     finding_ids: List[str],
     sha256: str,
@@ -252,6 +293,8 @@ class SentryCLI:
     ):
         self.target_path = target_path.resolve()
         self.vault_path = vault_path.resolve()
+        validate_vault_location(self.target_path, self.vault_path)
+        ensure_private_dir(self.vault_path)
         self.report_path = report_path or (self.vault_path / "Reports" / f"Risk_Heatmap_Report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.md")
         self.scan_depth = scan_depth
 
@@ -661,8 +704,7 @@ class SentryCLI:
 
     def save_findings_state(self):
         """Persists the audit findings so the confirmation gate never has to rescan."""
-        state_dir = self.vault_path / FINDINGS_DIRNAME
-        state_dir.mkdir(parents=True, exist_ok=True)
+        state_dir = ensure_private_dir(self.vault_path / FINDINGS_DIRNAME)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
         self.state_path = state_dir / f"{FINDINGS_STATE_PREFIX}{timestamp}.json"
 
@@ -695,7 +737,7 @@ class SentryCLI:
         print(f"[+] Audit state saved for the confirmation gate: {self.state_path}")
 
     def generate_report(self):
-        self.report_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.report_path.parent)
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         
         crit_count = sum(1 for f in self.findings if f["severity"] == "CRITICAL")
@@ -811,8 +853,7 @@ class SentryCLI:
         checksum is recorded once, listing every approved finding id for that file.
         """
         timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        session_vault = self.vault_path / f"Quarantine_{timestamp_str}"
-        session_vault.mkdir(parents=True, exist_ok=True)
+        session_vault = ensure_private_dir(self.vault_path / f"Quarantine_{timestamp_str}")
 
         approved_set = set(approved_ids)
         selected = [f for f in self.findings if f["id"] in approved_set]
@@ -850,11 +891,28 @@ class SentryCLI:
 
             sha_hash = sha256_file(src)
             dest.parent.mkdir(parents=True, exist_ok=True)
+            restrict_tree_to_owner(dest.parent, session_vault)
 
             try:
                 shutil.move(str(src), str(dest))
             except OSError as exc:
                 print(f"  [!] FAILED  {label}: could not move into the vault: {exc}")
+                failures.append(label)
+                continue
+
+            # Verify after the move: a file edited between hashing and moving would
+            # otherwise be recorded under a checksum it no longer matches.
+            moved_hash = try_sha256_file(dest)
+            if moved_hash != sha_hash:
+                print(
+                    f"  [!] FAILED  {label}: checksum mismatch after the move "
+                    "(the file changed during quarantine)"
+                )
+                try:
+                    shutil.move(str(dest), str(src))
+                    print(f"  [\u21a9] RETURNED {label} to {src}")
+                except OSError as exc:
+                    print(f"  [✗] could not return {label} to {src}: {exc}; the copy remains at {dest}")
                 failures.append(label)
                 continue
 
@@ -1005,7 +1063,15 @@ def main():
     parser = argparse.ArgumentParser(description="Sentry CLI: Zero-Egress Local Security Auditor for UGREEN AI NAS")
     parser.add_argument("--action", choices=["audit", "rollback"], default="audit")
     parser.add_argument("--target", type=str, default=None, help=f"Storage root to audit (default: {DEFAULT_TARGET})")
-    parser.add_argument("--vault", type=str, default=None, help=f"Quarantine vault root (default: {DEFAULT_VAULT})")
+    parser.add_argument(
+        "--vault",
+        type=str,
+        default=None,
+        help=(
+            f"Quarantine vault root, created owner-only (0700) and required to live "
+            f"outside --target (default: {DEFAULT_VAULT})"
+        )
+    )
     parser.add_argument("--depth", choices=["quick", "standard", "deep"], default="deep")
     parser.add_argument(
         "--shared", dest="shared", action="store_true", default=None,
@@ -1049,9 +1115,18 @@ def main():
     # ------------------------------------------------------------------
     # Confirmation gate: confirm the saved audit, never rescan the storage
     # ------------------------------------------------------------------
+    target_root_resolved = Path(args.target or DEFAULT_TARGET).resolve()
+    vault_root_resolved = Path(args.vault or DEFAULT_VAULT).resolve()
+    try:
+        validate_vault_location(target_root_resolved, vault_root_resolved)
+    except ValueError as exc:
+        print(f"[!] Error: {exc}")
+        print("    Choose a vault outside the audited root, e.g. --vault /volume1/Private_Security_Vault")
+        sys.exit(1)
+
     if args.approve is not None:
         target_root = Path(args.target).resolve() if args.target else None
-        vault_root = Path(args.vault or DEFAULT_VAULT).resolve()
+        vault_root = vault_root_resolved
 
         if args.findings:
             state_path: Optional[Path] = Path(args.findings).resolve()
@@ -1072,14 +1147,18 @@ def main():
             print(f"[!] Error: cannot read audit state {state_path}: {exc}")
             sys.exit(1)
 
-        cli = SentryCLI(
-            target_path=Path(state["target_root"]),
-            vault_path=Path(state["vault_root"]),
-            report_path=Path(state["report_path"]) if state.get("report_path") else None,
-            is_shared=bool(state.get("is_shared", True)),
-            is_public=bool(state.get("is_public", True)),
-            scan_depth=state.get("scan_depth", "deep")
-        )
+        try:
+            cli = SentryCLI(
+                target_path=Path(state["target_root"]),
+                vault_path=Path(state["vault_root"]),
+                report_path=Path(state["report_path"]) if state.get("report_path") else None,
+                is_shared=bool(state.get("is_shared", True)),
+                is_public=bool(state.get("is_public", True)),
+                scan_depth=state.get("scan_depth", "deep")
+            )
+        except ValueError as exc:
+            print(f"[!] Error: {exc}")
+            sys.exit(1)
         cli.findings = state["findings"]
         cli.total_evaluated = int(state.get("total_evaluated", 0))
         cli.state_path = state_path
@@ -1097,13 +1176,17 @@ def main():
     # ------------------------------------------------------------------
     # Default: full 4-pass audit (state is saved for a later confirmation)
     # ------------------------------------------------------------------
-    cli = SentryCLI(
-        target_path=Path(args.target or DEFAULT_TARGET),
-        vault_path=Path(args.vault or DEFAULT_VAULT),
-        scan_depth=args.depth,
-        is_shared=args.shared,
-        is_public=args.public
-    )
+    try:
+        cli = SentryCLI(
+            target_path=Path(args.target or DEFAULT_TARGET),
+            vault_path=Path(args.vault or DEFAULT_VAULT),
+            scan_depth=args.depth,
+            is_shared=args.shared,
+            is_public=args.public
+        )
+    except ValueError as exc:
+        print(f"[!] Error: {exc}")
+        sys.exit(1)
     cli.run_audit()
     if cli.prompt_quarantine_gate(args.approve) is False:
         sys.exit(1)
